@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+models/
 package-lock.json.bak
 dist/
 build/
