@@ -1,11 +1,9 @@
 import Decimal from 'decimal.js';
 import { z } from 'zod';
+import { isoDateSchema } from '../../common/validate.js';
 
 // Shared by the subscriptions, portal and renewals routers.
-export const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
-}, 'Must be a real calendar date');
+export const dateSchema = isoDateSchema;
 
 export const pageQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
