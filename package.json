@@ -1,0 +1,29 @@
+{
+  "name": "brightloop-subscription-system",
+  "version": "0.1.0",
+  "description": "Subscription Management System for Brightloop Software",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "install": "npm ci",
+    "build": "npm run build --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "dev": "npm run dev --workspaces",
+    "start": "npm run start --workspaces",
+    "migrate": "node db/migrate.js",
+    "migrate:reset": "node db/reset.js && node db/migrate.js",
+    "seed": "node db/seed.js",
+    "health-check": "node scripts/health-check.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
