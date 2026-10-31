@@ -19,6 +19,7 @@ import subscriptionRoutes from './modules/subscriptions/routes.js';
 import templateRoutes from './modules/templates/routes.js';
 import userRoutes from './modules/users/routes.js';
 import { createSupportRouter } from './modules/support/support.js';
+import { createKnowledgeRouter } from './modules/support/knowledge.js';
 
 export function createApp(pool: Pool = db): Express {
   const app = express();
@@ -70,6 +71,7 @@ export function createApp(pool: Pool = db): Express {
   app.use('/api/subscriptions', subscriptionRoutes);
   app.use('/api/portal', portalRoutes);
   app.use('/api/support', createSupportRouter(pool));
+  app.use('/api/support-knowledge', createKnowledgeRouter(pool));
   // Catalog owns /api/products and /api/taxes; mounted last so its auth guard never shadows others.
   app.use('/api', catalogRoutes);
 
