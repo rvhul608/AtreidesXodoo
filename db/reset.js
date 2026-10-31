@@ -4,6 +4,7 @@
  * WARNING: Destructive. Only use in dev environments.
  */
 
+import 'dotenv/config';
 import pg from 'pg';
 
 const client = new pg.Client({
@@ -18,6 +19,7 @@ async function reset() {
     // Drop all tables in reverse order of creation (respect FKs)
     const tables = [
       'discount_usage',
+      'renewal_chase_log',
       'discount_scopes',
       'discount_rules',
       'payments',
@@ -31,11 +33,13 @@ async function reset() {
       'plan_pricing',
       'plans',
       'attachments',
+      'product_taxes',
       'tax_rules',
       'product_variants',
       'products',
       'email_outbox',
       'audit_log',
+      'outbox_emails',
       'reset_tokens',
       'users',
       'customers',

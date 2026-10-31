@@ -40,3 +40,6 @@ export async function query<Row extends QueryResultRow>(
   const result = await db.query<Row>(text, values as unknown[]);
   return result.rows;
 }
+
+/** Name used by the Section A modules; the same pool as `db`. */
+export const pool = db;

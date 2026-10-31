@@ -1,6 +1,6 @@
 import { ErrorRequestHandler, RequestHandler } from 'express';
 
-export type ErrorCode =
+export type KnownErrorCode =
   | 'AUTH_REQUIRED'
   | 'FORBIDDEN'
   | 'NOT_FOUND'
@@ -8,6 +8,9 @@ export type ErrorCode =
   | 'VALIDATION_FAILED'
   | 'DATABASE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
+
+// Modules add specific codes (e.g. PLAN_DISALLOWS); the known ones keep autocompletion.
+export type ErrorCode = KnownErrorCode | (string & {});
 
 export class AppError extends Error {
   constructor(
