@@ -9,6 +9,8 @@ import { readDatabaseTimestamp } from './common/health.repository.js';
 import { pool } from './common/db.js';
 import authRoutes from './modules/auth/routes.js';
 import userRoutes from './modules/users/routes.js';
+import renewalRoutes from './modules/renewals/routes.js';
+import outboxRoutes from './modules/outbox/routes.js';
 
 export const app = express();
 
@@ -39,6 +41,8 @@ app.get('/health', async (_request, response) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/renewals', renewalRoutes);
+app.use('/api/admin/outbox', outboxRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
