@@ -1,7 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
-import './index.css';
+import { BrowserRouter } from 'react-router-dom';
+import App from '../ui1/App';
+import '@fontsource-variable/manrope';
+import '../ui1/styles/tokens.css';
+import '../ui1/styles/base.css';
+import '../ui1/styles/components.css';
 
 const root = document.getElementById('root');
 if (!root) {
@@ -10,6 +14,8 @@ if (!root) {
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
-    <App />
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
   </React.StrictMode>,
 );
