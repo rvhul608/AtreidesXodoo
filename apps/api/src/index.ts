@@ -15,6 +15,7 @@ import catalogRoutes from './modules/catalog/routes.js';
 import discountRoutes from './modules/discounts/routes.js';
 import invoiceRoutes from './modules/invoices/routes.js';
 import outboxRoutes from './modules/outbox/routes.js';
+import paymentRoutes from './modules/payments/routes.js';
 import planRoutes from './modules/plans/routes.js';
 import portalRoutes from './modules/portal/routes.js';
 import renewalRoutes from './modules/renewals/routes.js';
@@ -73,6 +74,8 @@ export function createApp(pool: Pool = db): Express {
   app.use('/api/portal', portalRoutes);
   app.use('/api/billing', billingRoutes);
   app.use('/api/discounts', discountRoutes);
+  // Payments owns /api/payments and /api/invoices/:id/payments, so it sits before the invoices router.
+  app.use('/api', paymentRoutes);
   app.use('/api/invoices', invoiceRoutes);
   // Catalog owns /api/products and /api/taxes; mounted last so its auth guard never shadows others.
   app.use('/api', catalogRoutes);
