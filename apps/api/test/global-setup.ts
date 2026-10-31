@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const apiRoot = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(apiRoot, '../../..');
-const databaseUrl = 'postgresql://brightloop:password@localhost:5432/brightloop_test';
+const databaseUrl = process.env.TEST_DATABASE_URL || 'postgresql://brightloop:password@localhost:5432/brightloop_test';
 
 export default function setup() {
   const env = { ...process.env, DATABASE_URL: databaseUrl };
