@@ -33,6 +33,7 @@ async function reset() {
       'plan_pricing',
       'plans',
       'attachments',
+      'product_taxes',
       'tax_rules',
       'product_variants',
       'products',
