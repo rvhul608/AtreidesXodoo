@@ -638,6 +638,7 @@ The detailed examples above preserve the implementation intent for selected rout
 | Renewals | `GET /api/renewals` **planned** | admin, user | page/pageSize, date range | upcoming renewals |
 | Renewals | `POST /api/renewals/:id/chase` **planned** | admin | template / note | queued outbox action |
 | Outbox | `GET /api/admin/outbox` | admin | page/pageSize, sent status | paginated outbox email rows |
+| Support | `POST /api/support/message` | authenticated | `topic`: `subscriptions`, `unpaid_invoices`, or `invoice_details`; `invoiceId` required for invoice details | `{ message, items }`, up to 20 customer-scoped records |
 
 For role-based access, `admin` mutates tenant records, `user` has permitted operational reads, and `viewer` has read-only access. All three roles remain tenant-scoped. The current schema deliberately uses these three values; `staff` and `customer` must not be introduced without a coordinated migration and contract update.
 

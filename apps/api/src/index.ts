@@ -22,6 +22,7 @@ import renewalRoutes from './modules/renewals/routes.js';
 import subscriptionRoutes from './modules/subscriptions/routes.js';
 import templateRoutes from './modules/templates/routes.js';
 import userRoutes from './modules/users/routes.js';
+import { createSupportRouter } from './modules/support/support.js';
 
 export function createApp(pool: Pool = db): Express {
   const app = express();
@@ -77,6 +78,7 @@ export function createApp(pool: Pool = db): Express {
   // Payments owns /api/payments and /api/invoices/:id/payments, so it sits before the invoices router.
   app.use('/api', paymentRoutes);
   app.use('/api/invoices', invoiceRoutes);
+  app.use('/api/support', createSupportRouter(pool));
   // Catalog owns /api/products and /api/taxes; mounted last so its auth guard never shadows others.
   app.use('/api', catalogRoutes);
 
