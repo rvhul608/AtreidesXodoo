@@ -14,6 +14,8 @@ export default defineConfig({
     testTimeout: 15_000,
     hookTimeout: 30_000,
     sequence: { concurrent: false },
+    // All files share one database; running them one at a time keeps list totals and pages stable.
+    fileParallelism: false,
   },
   resolve: { alias: { '@api': path.join(apiRoot, 'src') } },
 });
