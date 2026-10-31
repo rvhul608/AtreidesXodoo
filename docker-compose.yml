@@ -1,46 +1,55 @@
-version: '3.9'
+name: brightloop
 
 services:
   postgres:
     image: postgres:18-alpine
-    container_name: brightloop_postgres
     environment:
       POSTGRES_DB: brightloop_dev
       POSTGRES_USER: brightloop
       POSTGRES_PASSWORD: password
-    ports:
-      - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U brightloop -d brightloop_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://brightloop:password@postgres:5432/brightloop_dev
+      NODE_ENV: production
+      API_PORT: 3000
+      WEB_ORIGIN: http://localhost:5173
+      JWT_SECRET: ${JWT_SECRET:-brightloop-local-development-secret-change-me}
+      COOKIE_SECURE: "false"
+      COOKIE_SAME_SITE: lax
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
       timeout: 5s
-      retries: 5
-    networks:
-      - brightloop
+      retries: 12
+    restart: unless-stopped
 
-  # API service (optional, for containerized dev)
-  # api:
-  #   build:
-  #     context: .
-  #     dockerfile: apps/api/Dockerfile
-  #   container_name: brightloop_api
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     DATABASE_URL: postgresql://brightloop:password@postgres:5432/brightloop_dev
-  #     NODE_ENV: development
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #   networks:
-  #     - brightloop
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+    restart: unless-stopped
 
 volumes:
   postgres_data:
-    driver: local
-
-networks:
-  brightloop:
-    driver: bridge

@@ -2,9 +2,29 @@
 
 Odoo x Make-A-Ton 9.0 project: a subscription management system for the fictional Brightloop Software. Express + TypeScript API (`apps/api`), local Postgres, no third-party services.
 
-## Backend quick start
+## Run the full application with Docker
 
-Requirements: Node 18+, a local Postgres with a `brightloop` role (password `password`) that owns `brightloop_dev` and `brightloop_test`.
+The only requirement is Docker Desktop or Docker Engine with Docker Compose.
+
+```bash
+docker compose up --build
+```
+
+Open http://localhost:5173. The API is also available at http://localhost:3000 and its health endpoint is http://localhost:3000/health.
+
+The API container waits for PostgreSQL, then runs migrations and seeds the demo data automatically. The seed is safe to re-run. Stop the stack with `docker compose down`; add `-v` to also remove the local database volume.
+
+For a non-default local session key, start it with `JWT_SECRET='your-long-random-value' docker compose up --build`.
+
+Demo accounts created by the seed:
+
+- `admin@brightloop.local` / `ChangeMe123!`
+- `staff@brightloop.local` / `DemoPass123!`
+- `customer1@brightloop.local` / `DemoPass123!`
+
+## Local development without Docker
+
+Requirements: Node 18+ and a local Postgres with a `brightloop` role (password `password`) that owns `brightloop_dev` and `brightloop_test`.
 
 ```bash
 npm ci --include=dev          # dev tools (tsx, vitest, tsc) are needed even if npm omits dev deps
