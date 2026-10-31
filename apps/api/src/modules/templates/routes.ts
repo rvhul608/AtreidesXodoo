@@ -5,6 +5,7 @@ import { requireAuth, requireRole } from '../../common/auth-middleware.js';
 import { validateBody, validateParams, validateQuery } from '../../common/validate.js';
 import * as service from './service.js';
 const router = Router();
+router.use(requireAuth);
 const id = z.object({ id: z.coerce.number().int().positive() });
 const page = z.object({
   page: z.coerce.number().int().min(1).default(1),
