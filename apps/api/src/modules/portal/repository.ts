@@ -43,13 +43,13 @@ export async function listCustomerInvoices(
   const [rows, count] = await Promise.all([
     pool.query<InvoiceRow>(
       `${invoiceSelect}
-       WHERE i.customer_id = $1
+       WHERE i.customer_id = $1 AND i.status <> 'Draft'
        ORDER BY i.id DESC
        LIMIT $3 OFFSET $4`,
       [customerId, today, limit, offset],
     ),
     pool.query<{ total: string }>(
-      'SELECT count(*)::text AS total FROM invoices WHERE customer_id = $1',
+      "SELECT count(*)::text AS total FROM invoices WHERE customer_id = $1 AND status <> 'Draft'",
       [customerId],
     ),
   ]);
@@ -63,7 +63,7 @@ export async function findCustomerInvoice(
 ): Promise<InvoiceRow | null> {
   const result = await pool.query<InvoiceRow>(
     `${invoiceSelect}
-     WHERE i.customer_id = $1 AND i.id = $3`,
+     WHERE i.customer_id = $1 AND i.id = $3 AND i.status <> 'Draft'`,
     [customerId, today, invoiceId],
   );
   return result.rows[0] ?? null;
