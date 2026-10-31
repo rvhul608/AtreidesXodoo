@@ -1,20 +1,34 @@
 # Brightloop Subscription API Contract
-**Phase 1 Schema & Infrastructure Skeleton**
+**Version 1.0 — canonical contract**
 
 ## Overview
 
-This API contract defines all Phase 1 endpoints, request/response shapes, authentication, RBAC, real-time patterns, and the pure billing engine. Implementation responsibility is divided:
+This API contract defines all endpoint shapes, authentication, RBAC, real-time patterns, and the pure billing engine. It is based on `db/schema.sql`; a route for data not yet represented in the schema requires an append-only migration before it can ship.
+
+The **Canonical conventions** below override older illustrative response snippets later in this document. Feature owners must update this file before changing a public shape.
+
+Implementation responsibility is divided:
 
 - **Agent A:** Auth routes, outbox, user portal
 - **Agent B:** Billing/payments services, real-time SSE, database health
 - **Agent C:** Catalog routes, subscription lifecycle, reports
+
+### Canonical conventions
+
+- All product endpoints use the `/api` prefix. `GET /health` is the sole public exception.
+- Success payloads are `{ "data": ... }`; list payloads are `{ "data": [...], "meta": { "page", "pageSize", "total" } }`. Logout may return `204 No Content`.
+- Errors are `{ "error": { "code", "message", "details?" } }`. `details` is structured validation information and never a stack trace.
+- Lists accept `page` (default `1`) and `pageSize` (default `20`, maximum `100`), plus only the documented filters. SQL must use parameterized values.
+- Identifiers are positive integers. Timestamps are ISO 8601 strings; dates use `YYYY-MM-DD`.
+- Mutating endpoints validate request bodies with Zod. Money and quantity are decimal strings; application code uses `decimal.js`, and persisted money remains `NUMERIC(12,2)`.
+- Calls are customer-scoped from the authenticated session. A request never accepts an arbitrary `customer_id` to widen access.
 
 ---
 
 ## Authentication & Authorization
 
 ### Cookie-based Session Auth
-- All endpoints (except `/health`) require a valid session cookie: `session=<id>`
+- All endpoints (except `/health`) require a valid httpOnly session cookie: `session=<id>`
 - Sessions stored in database (managed by Agent A)
 - RBAC roles: `admin`, `user`, `viewer`
 - Customer scope enforcement: users can only access resources for their customer_id
@@ -22,8 +36,10 @@ This API contract defines all Phase 1 endpoints, request/response shapes, authen
 ### Error Response (Unauthorized)
 ```json
 {
-  "error": "Unauthorized",
-  "code": "AUTH_REQUIRED"
+  "error": {
+    "code": "AUTH_REQUIRED",
+    "message": "Authentication is required"
+  }
 }
 ```
 
@@ -63,11 +79,13 @@ Returns database connectivity and server status.
 **Response 200 OK**
 ```json
 {
-  "status": "ok",
-  "timestamp": "2024-11-01T10:30:00Z",
-  "database": {
-    "connected": true,
-    "timestamp": "2024-11-01T10:30:00Z"
+  "data": {
+    "status": "ok",
+    "timestamp": "2024-11-01T10:30:00Z",
+    "database": {
+      "connected": true,
+      "timestamp": "2024-11-01T10:30:00Z"
+    }
   }
 }
 ```
@@ -75,10 +93,9 @@ Returns database connectivity and server status.
 **Response 503 Service Unavailable (DB down)**
 ```json
 {
-  "status": "error",
-  "error": "Database connection failed",
-  "database": {
-    "connected": false
+  "error": {
+    "code": "DATABASE_UNAVAILABLE",
+    "message": "Database connection failed"
   }
 }
 ```
@@ -87,7 +104,7 @@ Returns database connectivity and server status.
 
 ## Auth Routes (Agent A)
 
-### POST /auth/login
+### POST /api/auth/login
 Login with email and password.
 
 **Request**
@@ -102,11 +119,13 @@ Login with email and password.
 Sets `session` cookie; user customer_id inferred from user record.
 ```json
 {
-  "user": {
-    "id": 123,
-    "email": "user@company.local",
-    "customer_id": 456,
-    "role": "admin"
+  "data": {
+    "user": {
+      "id": 123,
+      "email": "user@company.local",
+      "customer_id": 456,
+      "role": "admin"
+    }
   }
 }
 ```
@@ -114,16 +133,19 @@ Sets `session` cookie; user customer_id inferred from user record.
 **Response 401 Unauthorized**
 ```json
 {
-  "error": "Invalid credentials"
+  "error": {
+    "code": "INVALID_CREDENTIALS",
+    "message": "Invalid credentials"
+  }
 }
 ```
 
-### POST /auth/logout
+### POST /api/auth/logout
 Clear session.
 
 **Response 204 No Content**
 
-### POST /auth/request-reset
+### POST /api/auth/request-reset
 Request password reset token (single-use, expiring).
 
 **Request**
@@ -136,7 +158,9 @@ Request password reset token (single-use, expiring).
 **Response 200 OK** (always, no user enumeration)
 ```json
 {
-  "message": "Reset link sent if account exists"
+  "data": {
+    "message": "Reset link sent if account exists"
+  }
 }
 ```
 
@@ -151,8 +175,8 @@ List invoices for authenticated user's customer. Paginated.
 
 **Query Parameters**
 - `status`: Draft, Confirmed, Paid, Cancelled (optional)
-- `limit`: default 20, max 100
-- `offset`: default 0
+- `page`: default 1
+- `pageSize`: default 20, max 100
 - `sort`: `created_at`, `due_date`, `total` (default: `due_date` DESC)
 
 **Response 200 OK**
@@ -175,9 +199,9 @@ List invoices for authenticated user's customer. Paginated.
       "created_at": "2024-11-01T09:00:00Z"
     }
   ],
-  "pagination": {
-    "limit": 20,
-    "offset": 0,
+  "meta": {
+    "page": 1,
+    "pageSize": 20,
     "total": 150
   }
 }
@@ -244,7 +268,10 @@ Move invoice from Draft → Confirmed state. Only admin.
 **Response 409 Conflict** (if not in Draft)
 ```json
 {
-  "error": "Invoice not in Draft status"
+  "error": {
+    "code": "INVALID_INVOICE_STATE",
+    "message": "Invoice is not in Draft status"
+  }
 }
 ```
 
@@ -256,7 +283,7 @@ Record a payment against invoice. Idempotent: checks invoice is not already paid
 {
   "amount": "108.24",
   "payment_method": "card",
-  "notes": "Payment received via Stripe" // optional
+  "notes": "Payment received locally"
 }
 ```
 
@@ -279,14 +306,20 @@ Record a payment against invoice. Idempotent: checks invoice is not already paid
 **Response 409 Conflict** (if overpayment or invoice not Confirmed)
 ```json
 {
-  "error": "Invoice not ready for payment or amount exceeds due total"
+  "error": {
+    "code": "CONFLICT",
+    "message": "Invoice is not ready for payment or amount exceeds due total"
+  }
 }
 ```
 
 **Response 422 Unprocessable** (amount mismatch)
 ```json
 {
-  "error": "Amount exceeds outstanding balance"
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "Amount exceeds outstanding balance"
+  }
 }
 ```
 
@@ -413,8 +446,8 @@ List subscriptions. Paginated, customer-scoped.
 
 **Query Parameters**
 - `status`: Active, Paused, Cancelled (optional)
-- `limit`: default 20, max 100
-- `offset`: default 0
+- `page`: default 1
+- `pageSize`: default 20, max 100
 
 **Response 200 OK**
 ```json
@@ -436,9 +469,9 @@ List subscriptions. Paginated, customer-scoped.
       "created_at": "2024-11-01T08:00:00Z"
     }
   ],
-  "pagination": {
-    "limit": 20,
-    "offset": 0,
+  "meta": {
+    "page": 1,
+    "pageSize": 20,
     "total": 42
   }
 }
@@ -551,59 +584,135 @@ Admin page to view pending and sent emails.
 
 ---
 
+## Endpoint ownership and coverage
+
+The detailed examples above preserve the implementation intent for selected routes. This inventory is the complete delivery surface. An entry marked **planned** is a contract reservation, not a claim that the route is implemented. Every list uses the canonical pagination fields unless noted.
+
+| Owner | Method and path | Roles | Query / body | Success `data` |
+|---|---|---|---|---|
+| Shared | `GET /health` | public | — | API and database health |
+| Auth | `POST /api/auth/signup` | public | company name, email, password | user and customer |
+| Auth | `POST /api/auth/login` | public | email, password | authenticated user; sets cookie |
+| Auth | `POST /api/auth/logout` | authenticated | — | `null`; clears cookie |
+| Auth | `GET /api/auth/me` | admin, user, viewer | — | authenticated user |
+| Auth | `POST /api/auth/request-reset` | public | email | generic acceptance message |
+| Auth | `POST /api/auth/reset` | public | token, new password | `null` |
+| Auth | `GET, POST /api/users` | admin | page/pageSize; email, role | paginated users; created user |
+| Auth | `PATCH /api/users/:id` | admin | is_active, role | updated user |
+| Catalog | `GET, POST /api/products` | authenticated; admin write | page/pageSize, search; sku, name, description | paginated products; created product |
+| Catalog | `GET, PATCH /api/products/:id` | authenticated; admin write | product fields | product |
+| Catalog | `POST /api/products/:id/variants` | admin | variant_key, description | variant |
+| Catalog | `GET, POST /api/taxes` | authenticated; admin write | page/pageSize; jurisdiction, tax_code, rate | paginated tax rules; created tax rule |
+| Catalog | `GET, POST /api/plans` | authenticated; admin write | page/pageSize; plan metadata and pricing | paginated plans; created plan |
+| Catalog | `GET, PATCH /api/plans/:id` | authenticated; admin write | plan metadata and pricing | plan |
+| Catalog | `GET, POST /api/templates` | authenticated; admin write | page/pageSize; name, description, lines | paginated templates; created template |
+| Catalog | `GET, PATCH /api/templates/:id` | authenticated; admin write | template metadata and lines | template |
+| Subscriptions | `GET, POST /api/subscriptions` | authenticated; admin write | page/pageSize, status; plan_id, period, quantity, start_date, auto_renew | paginated subscriptions; created subscription |
+| Subscriptions | `GET, PATCH /api/subscriptions/:id` | authenticated; admin write | status, end_date, auto_renew | subscription and transition history entry |
+| Subscriptions | `GET /api/subscriptions/:id/history` | authenticated | page/pageSize | paginated status history |
+| Billing | `GET /api/invoices` | authenticated | page/pageSize, status, due date range, sort | paginated invoices |
+| Billing | `GET /api/invoices/:id` | authenticated | — | invoice, lines, payments, trace |
+| Billing | `POST /api/invoices/:id/confirm` | admin | — | confirmed invoice |
+| Billing | `POST /api/invoices/:id/cancel` | admin | reason | cancelled invoice |
+| Billing | `POST /api/invoices/:id/send` | admin | — | invoice and queued outbox item |
+| Billing | `GET /api/invoices/:id/print` | authenticated | — | print-safe invoice representation |
+| Payments | `POST /api/invoices/:id/charge` | admin | amount, payment_method, notes, idempotency key | invoice and payment |
+| Payments | `GET /api/payments` | authenticated | page/pageSize, invoice_id, status | paginated payments |
+| Billing | `POST /api/billing-runs/preview` **planned** | admin | as_of_date, subscription filters | calculations only; no writes |
+| Billing | `POST /api/billing-runs` **planned** | admin | as_of_date, subscription filters, idempotency key | persisted run and invoices |
+| Billing | `GET /api/billing-runs` **planned** | admin | page/pageSize | paginated runs |
+| Realtime | `GET /api/subscribe?channel=` | authenticated | allowlisted channel | SSE stream scoped to customer |
+| Portal | `GET /api/portal/subscriptions` | authenticated | page/pageSize | caller's subscriptions |
+| Portal | `GET /api/portal/invoices` | authenticated | page/pageSize, status | caller's invoices |
+| Portal | `GET /api/portal/invoices/:id` | authenticated | — | caller's invoice only |
+| Reports | `GET /api/reports/dashboard` **planned** | admin, user | date range, status | active count, collected, outstanding, overdue, MRR/ARR |
+| Reports | `GET /api/reports/revenue` **planned** | admin, user | date range, grouping | paginated aggregate rows |
+| Reports | `GET /api/reports/outstanding` | admin, user | page/pageSize, due date range | paginated outstanding invoices |
+| Reports | `GET /api/reports/overdue` | admin, user | page/pageSize, due date range | paginated overdue invoices |
+| Reports | `GET /api/reports/mrr` **planned** | admin, user | as_of_date | MRR, ARR, net-new MRR, churn, next-30-day expected billing |
+| Leakage | `GET /api/leakage` **planned** | admin | page/pageSize, type, status | findings and estimated amount at risk |
+| Leakage | `POST /api/leakage/imports` **planned** | admin | local CSV file | imported and matched/unmatched rows |
+| Leakage | `POST /api/leakage/:id/recover` **planned** | admin | recovery action | recovery result; delegates to billing engine |
+| Explain | `GET /api/invoices/:id/explain` **planned** | authenticated | — | read-only calculation trace |
+| Simulator | `POST /api/simulator/preview` **planned** | admin | hypothetical pricing/rules/date | non-persisted invoice preview |
+| Renewals | `GET /api/renewals` **planned** | admin, user | page/pageSize, date range | upcoming renewals |
+| Renewals | `POST /api/renewals/:id/chase` **planned** | admin | template / note | queued outbox action |
+| Outbox | `GET /api/admin/outbox` | admin | page/pageSize, sent status | paginated outbox email rows |
+
+For role-based access, `admin` mutates tenant records, `user` has permitted operational reads, and `viewer` has read-only access. All three roles remain tenant-scoped. The current schema deliberately uses these three values; `staff` and `customer` must not be introduced without a coordinated migration and contract update.
+
 ## Error Responses
 
 ### 400 Bad Request
 ```json
 {
-  "error": "Bad request",
-  "details": { "field": "invalid" }
+  "error": {
+    "code": "BAD_REQUEST",
+    "message": "Bad request",
+    "details": { "field": "invalid" }
+  }
 }
 ```
 
 ### 401 Unauthorized
 ```json
 {
-  "error": "Unauthorized",
-  "code": "AUTH_REQUIRED"
+  "error": {
+    "code": "AUTH_REQUIRED",
+    "message": "Authentication is required"
+  }
 }
 ```
 
 ### 403 Forbidden
 ```json
 {
-  "error": "Forbidden",
-  "code": "INSUFFICIENT_PERMISSIONS"
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "You do not have permission to perform this action"
+  }
 }
 ```
 
 ### 404 Not Found
 ```json
 {
-  "error": "Not found"
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Resource not found"
+  }
 }
 ```
 
 ### 409 Conflict
 ```json
 {
-  "error": "Conflict",
-  "details": { "reason": "Invoice already paid" }
+  "error": {
+    "code": "CONFLICT",
+    "message": "Invoice already paid",
+    "details": { "reason": "Invoice already paid" }
+  }
 }
 ```
 
 ### 422 Unprocessable Entity
 ```json
 {
-  "error": "Unprocessable entity",
-  "details": { "field": "value must be positive" }
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "Request validation failed",
+    "details": { "field": "value must be positive" }
+  }
 }
 ```
 
 ### 500 Internal Server Error
 ```json
 {
-  "error": "Internal server error"
+  "error": {
+    "code": "INTERNAL_ERROR",
+    "message": "An unexpected error occurred"
+  }
 }
 ```
 (Details excluded in production; development may include stack trace)
