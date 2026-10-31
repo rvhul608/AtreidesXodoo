@@ -12,6 +12,7 @@ import { errorHandler, notFoundHandler } from './common/error-middleware.js';
 import authRoutes from './modules/auth/routes.js';
 import billingRoutes from './modules/billing/routes.js';
 import catalogRoutes from './modules/catalog/routes.js';
+import invoiceRoutes from './modules/invoices/routes.js';
 import outboxRoutes from './modules/outbox/routes.js';
 import planRoutes from './modules/plans/routes.js';
 import portalRoutes from './modules/portal/routes.js';
@@ -70,6 +71,7 @@ export function createApp(pool: Pool = db): Express {
   app.use('/api/subscriptions', subscriptionRoutes);
   app.use('/api/portal', portalRoutes);
   app.use('/api/billing', billingRoutes);
+  app.use('/api/invoices', invoiceRoutes);
   // Catalog owns /api/products and /api/taxes; mounted last so its auth guard never shadows others.
   app.use('/api', catalogRoutes);
 
