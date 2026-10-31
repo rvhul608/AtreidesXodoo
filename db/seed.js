@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 /**
- * Seed script: populates database with demo data (~5000 customers, ~10000 subscriptions/invoices/payments).
- * Idempotent: uses ON CONFLICT DO NOTHING for re-entrancy.
+ * Seed script for local demos.
+ *
+ *   SEED_ADMIN_ONLY=true npm run seed   -> only the admin account
+ *   npm run seed                        -> admin, staff, demo customers, catalog, plans, template,
+ *                                          and subscriptions in every lifecycle state
+ *   SEED_SCALE=10000 npm run seed       -> additionally tops up to N bulk subscriptions for
+ *                                          pagination/performance checks
+ *
+ * Re-runnable: every insert is keyed on a natural unique value or guarded by an existence check.
  */
 
 import 'dotenv/config';
@@ -13,229 +20,309 @@ const client = new pg.Client({
   connectionString: process.env.DATABASE_URL || 'postgresql://brightloop:password@localhost:5432/brightloop_dev',
 });
 
-async function seed() {
-  try {
-    await client.connect();
-    console.log('Connected to database');
+const DEMO_PASSWORD = 'DemoPass123!';
+const DEMO_CUSTOMERS = ['Northwind Labs', 'Contoso Studio', 'Fabrikam Works'];
+const SCALE_CUSTOMERS = 200;
 
-    const adminEmail = (process.env.SEED_ADMIN_EMAIL || 'admin@brightloop.local').trim().toLowerCase();
-    const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'ChangeMe123!';
-    const adminPasswordHash = await bcrypt.hash(
-      `brightloop-v1:${createHash('sha256').update(adminPassword, 'utf8').digest('base64')}`,
-      12
+// Must match apps/api/src/common/password.ts (bcrypt over a SHA-256 pre-hash).
+function hashPassword(password) {
+  const digest = createHash('sha256').update(password, 'utf8').digest('base64');
+  return bcrypt.hash(`brightloop-v1:${digest}`, 12);
+}
+
+async function upsertStaffUser(email, password, role, name) {
+  await client.query(
+    `INSERT INTO users (email, password_hash, role, name)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (lower(email)) DO UPDATE
+     SET customer_id = NULL, password_hash = EXCLUDED.password_hash,
+         role = EXCLUDED.role, name = EXCLUDED.name, is_active = true,
+         updated_at = CURRENT_TIMESTAMP`,
+    [email, await hashPassword(password), role, name],
+  );
+}
+
+async function seedCustomers(passwordHash) {
+  const customers = [];
+  for (const [index, legalName] of DEMO_CUSTOMERS.entries()) {
+    const customer = await client.query(
+      `INSERT INTO customers (legal_name) VALUES ($1)
+       ON CONFLICT (legal_name) DO UPDATE SET legal_name = EXCLUDED.legal_name
+       RETURNING id`,
+      [legalName],
+    );
+    const customerId = Number(customer.rows[0].id);
+    const email = `customer${index + 1}@brightloop.local`;
+    await client.query(
+      `INSERT INTO users (customer_id, email, password_hash, role, name)
+       VALUES ($1, $2, $3, 'customer', $4)
+       ON CONFLICT (lower(email)) DO UPDATE
+       SET customer_id = EXCLUDED.customer_id, password_hash = EXCLUDED.password_hash,
+           role = 'customer', is_active = true`,
+      [customerId, email, passwordHash, legalName],
+    );
+    customers.push({ id: customerId, email, legalName });
+  }
+  return customers;
+}
+
+async function seedCatalog() {
+  const tax = await client.query(
+    `INSERT INTO tax_rules (name, jurisdiction, rate) VALUES ('GST 18%', 'IN', 0.18)
+     ON CONFLICT (name) DO UPDATE SET rate = EXCLUDED.rate
+     RETURNING id`,
+  );
+  const taxId = Number(tax.rows[0].id);
+
+  const products = {};
+  for (const product of [
+    { sku: 'ERP-LICENSE', name: 'ERP License', price: '1000.00', cost: '300.00' },
+    { sku: 'SUPPORT-HOURS', name: 'Support Hours', price: '250.00', cost: '120.00' },
+  ]) {
+    const row = await client.query(
+      `INSERT INTO products (sku, name, type, sales_price, cost_price, notes)
+       VALUES ($1, $2, 'service', $3, $4, 'Demo product')
+       ON CONFLICT (sku) DO UPDATE SET sales_price = EXCLUDED.sales_price, cost_price = EXCLUDED.cost_price
+       RETURNING id`,
+      [product.sku, product.name, product.price, product.cost],
+    );
+    products[product.sku] = Number(row.rows[0].id);
+    await client.query(
+      'INSERT INTO product_taxes (product_id, tax_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [products[product.sku], taxId],
+    );
+  }
+
+  const variant = await client.query(
+    `INSERT INTO product_variants (product_id, variant_key, name, value, extra_price)
+     VALUES ($1, 'brand-odoo', 'Brand', 'Odoo', 560)
+     ON CONFLICT (product_id, variant_key) DO UPDATE SET extra_price = EXCLUDED.extra_price
+     RETURNING id`,
+    [products['ERP-LICENSE']],
+  );
+  return { products, odooVariantId: Number(variant.rows[0].id), taxId };
+}
+
+async function seedPlans() {
+  const plans = {};
+  for (const plan of [
+    // Flexible: customers can pause, close early and renew.
+    { number: 'MONTHLY-FLEX', name: 'Monthly Flex', price: '99.00', period: 'monthly',
+      autoClose: false, earlyClose: true, pause: true, renew: true },
+    // Fixed annual contract: renewable, closes itself at expiry, no pause or early exit.
+    { number: 'YEARLY-FIXED', name: 'Yearly Fixed', price: '999.00', period: 'yearly',
+      autoClose: true, earlyClose: false, pause: false, renew: true },
+    // Short trial: no pause, no renewal, auto-closes.
+    { number: 'WEEKLY-TRIAL', name: 'Weekly Trial', price: '25.00', period: 'weekly',
+      autoClose: true, earlyClose: true, pause: false, renew: false },
+  ]) {
+    const row = await client.query(
+      `INSERT INTO plans (plan_number, name, price, period, min_quantity, auto_close,
+         allow_early_close, allow_pause, allow_renew)
+       VALUES ($1, $2, $3, $4, 1, $5, $6, $7, $8)
+       ON CONFLICT (plan_number) DO UPDATE
+       SET name = EXCLUDED.name, price = EXCLUDED.price, period = EXCLUDED.period,
+           auto_close = EXCLUDED.auto_close, allow_early_close = EXCLUDED.allow_early_close,
+           allow_pause = EXCLUDED.allow_pause, allow_renew = EXCLUDED.allow_renew
+       RETURNING id, period`,
+      [plan.number, plan.name, plan.price, plan.period, plan.autoClose, plan.earlyClose, plan.pause, plan.renew],
+    );
+    plans[plan.number] = { id: Number(row.rows[0].id), period: row.rows[0].period, price: plan.price };
+  }
+  return plans;
+}
+
+async function seedTemplate(planId, catalog) {
+  const existing = await client.query("SELECT id FROM quotation_templates WHERE name = 'Starter ERP bundle'");
+  if (existing.rowCount) return;
+  const template = await client.query(
+    `INSERT INTO quotation_templates (name, description, plan_id, validity_days)
+     VALUES ('Starter ERP bundle', 'ERP license (Odoo brand) plus two support hours', $1, 30)
+     RETURNING id`,
+    [planId],
+  );
+  const templateId = template.rows[0].id;
+  await client.query(
+    `INSERT INTO quotation_template_lines
+       (template_id, line_number, product_id, product_variant_id, quantity, quantity_value, unit_price)
+     VALUES ($1, 1, $2, $3, 1, 1, 1560), ($1, 2, $4, NULL, 2, 2, 250)`,
+    [templateId, catalog.products['ERP-LICENSE'], catalog.odooVariantId, catalog.products['SUPPORT-HOURS']],
+  );
+}
+
+// Each demo subscription walks the real lifecycle so its history reads like the API produced it.
+const LIFECYCLE = ['Draft', 'Quotation', 'Confirmed', 'Active'];
+const ACTIONS = {
+  'Draft->Quotation': 'send_quotation',
+  'Quotation->Confirmed': 'confirm',
+  'Confirmed->Active': 'activate',
+  'Active->Paused': 'pause',
+  'Active->Closed': 'close',
+};
+
+function statusPath(status) {
+  if (status === 'Paused' || status === 'Closed') return [...LIFECYCLE, status];
+  return LIFECYCLE.slice(0, LIFECYCLE.indexOf(status) + 1);
+}
+
+async function seedDemoSubscriptions(customers, plans, catalog) {
+  const existing = await client.query(
+    'SELECT 1 FROM subscriptions WHERE customer_id = ANY($1::bigint[]) LIMIT 1',
+    [customers.map((customer) => customer.id)],
+  );
+  if (existing.rowCount) return 0;
+
+  const demos = [
+    { customer: 0, plan: 'MONTHLY-FLEX', status: 'Active', expiresInDays: 12 },
+    { customer: 0, plan: 'MONTHLY-FLEX', status: 'Paused', expiresInDays: 200 },
+    { customer: 0, plan: 'YEARLY-FIXED', status: 'Quotation', expiresInDays: 365 },
+    { customer: 1, plan: 'YEARLY-FIXED', status: 'Active', expiresInDays: 25 },
+    { customer: 1, plan: 'WEEKLY-TRIAL', status: 'Active', expiresInDays: 5 },
+    { customer: 1, plan: 'MONTHLY-FLEX', status: 'Draft', expiresInDays: 90 },
+    { customer: 2, plan: 'MONTHLY-FLEX', status: 'Confirmed', expiresInDays: 120 },
+    { customer: 2, plan: 'YEARLY-FIXED', status: 'Active', expiresInDays: 300 },
+    { customer: 2, plan: 'WEEKLY-TRIAL', status: 'Closed', expiresInDays: -10 },
+    { customer: 2, plan: 'MONTHLY-FLEX', status: 'Active', expiresInDays: null },
+  ];
+
+  for (const demo of demos) {
+    const plan = plans[demo.plan];
+    const live = demo.status === 'Active' || demo.status === 'Paused';
+    const subscription = await client.query(
+      `INSERT INTO subscriptions (customer_id, plan_id, period, quantity, unit_price, start_date,
+         expiry_date, payment_terms, status, next_billing_date, paused_at, closed_at)
+       VALUES ($1, $2, $3, 3, $4, CURRENT_DATE - 30,
+         CASE WHEN $5::int IS NULL THEN NULL ELSE CURRENT_DATE + $5::int END,
+         'Net 15', $6,
+         CASE WHEN $7 THEN CURRENT_DATE + 5 ELSE NULL END,
+         CASE WHEN $6 = 'Paused' THEN CURRENT_DATE - 3 ELSE NULL END,
+         CASE WHEN $6 = 'Closed' THEN CURRENT_TIMESTAMP ELSE NULL END)
+       RETURNING id`,
+      [customers[demo.customer].id, plan.id, plan.period, plan.price, demo.expiresInDays, demo.status, live],
+    );
+    const subscriptionId = subscription.rows[0].id;
+
+    // ERP license with the Odoo brand variant (1000 + 560) and two support hours, 18% GST.
+    await client.query(
+      `INSERT INTO subscription_items (subscription_id, product_id, product_variant_id, description,
+         quantity, unit_price, amount, tax_amount, tax_ids)
+       VALUES
+         ($1, $2, $3, 'ERP License (Brand: Odoo)', 1, 1560.00, 1560.00, 280.80, ARRAY[$5]::bigint[]),
+         ($1, $4, NULL, 'Support Hours', 2, 250.00, 500.00, 90.00, ARRAY[$5]::bigint[])`,
+      [subscriptionId, catalog.products['ERP-LICENSE'], catalog.odooVariantId,
+        catalog.products['SUPPORT-HOURS'], catalog.taxId],
+    );
+
+    let previous = null;
+    for (const status of statusPath(demo.status)) {
+      const action = previous === null ? 'created' : ACTIONS[`${previous}->${status}`];
+      await client.query(
+        `INSERT INTO subscription_history (subscription_id, status, from_status, to_status, action, reason)
+         VALUES ($1, $2, $3, $2, $4, 'seed')`,
+        [subscriptionId, status, previous, action],
+      );
+      previous = status;
+    }
+  }
+  return demos.length;
+}
+
+// Bulk rows for the "fast at 10k+ subscriptions" requirement; built set-wise in SQL.
+async function seedScale(target, plans, catalog) {
+  if (!Number.isInteger(target) || target <= 0) return 0;
+  await client.query(
+    `INSERT INTO customers (legal_name)
+     SELECT 'Scale Customer ' || n FROM generate_series(1, $1) AS n
+     ON CONFLICT (legal_name) DO NOTHING`,
+    [SCALE_CUSTOMERS],
+  );
+  const existing = await client.query(
+    `SELECT count(*)::int AS total FROM subscriptions s
+     JOIN customers c ON c.id = s.customer_id WHERE c.legal_name LIKE 'Scale Customer %'`,
+  );
+  const missing = target - existing.rows[0].total;
+  if (missing <= 0) return 0;
+
+  const planIds = Object.values(plans).map((plan) => plan.id);
+  await client.query('BEGIN');
+  try {
+    const inserted = await client.query(
+      `WITH scale_customers AS (
+         SELECT id, row_number() OVER (ORDER BY id) - 1 AS slot
+         FROM customers WHERE legal_name LIKE 'Scale Customer %'
+       ),
+       rows AS (
+         SELECT n, (n % $2) AS customer_slot, ($3::bigint[])[1 + n % cardinality($3::bigint[])] AS plan_id,
+           (ARRAY['Draft','Quotation','Confirmed','Active','Active','Active','Paused','Closed'])[1 + n % 8] AS status
+         FROM generate_series(1, $1) AS n
+       )
+       INSERT INTO subscriptions (customer_id, plan_id, period, quantity, unit_price, start_date,
+         expiry_date, payment_terms, status, next_billing_date)
+       SELECT c.id, r.plan_id, p.period, 1, p.price, CURRENT_DATE - (r.n % 300),
+         CURRENT_DATE + (r.n % 400) - 30, 'Due on receipt', r.status,
+         CASE WHEN r.status = 'Active' THEN CURRENT_DATE + (r.n % 28) ELSE NULL END
+       FROM rows r
+       JOIN scale_customers c ON c.slot = r.customer_slot
+       JOIN plans p ON p.id = r.plan_id
+       RETURNING id, status`,
+      [missing, SCALE_CUSTOMERS, planIds],
     );
     await client.query(
-      `INSERT INTO users (email, password_hash, role, name)
-       VALUES ($1, $2, 'admin', 'Brightloop Administrator')
-       ON CONFLICT (lower(email)) DO UPDATE
-       SET customer_id = NULL, password_hash = EXCLUDED.password_hash,
-           role = 'admin', name = EXCLUDED.name, is_active = true,
-           updated_at = CURRENT_TIMESTAMP`,
-      [adminEmail, adminPasswordHash]
+      `INSERT INTO subscription_items (subscription_id, product_id, description, quantity, unit_price,
+         amount, tax_amount, tax_ids)
+       SELECT id, $2, 'Support Hours', 1, 250.00, 250.00, 45.00, ARRAY[$3]::bigint[]
+       FROM unnest($1::bigint[]) AS id`,
+      [inserted.rows.map((row) => row.id), catalog.products['SUPPORT-HOURS'], catalog.taxId],
     );
-    console.log(`✓ Ensured seeded admin account ${adminEmail}`);
+    await client.query(
+      `INSERT INTO subscription_history (subscription_id, status, from_status, to_status, action, reason)
+       SELECT id, status, NULL, status, 'created', 'scale seed'
+       FROM unnest($1::bigint[], $2::text[]) AS row(id, status)`,
+      [inserted.rows.map((row) => row.id), inserted.rows.map((row) => row.status)],
+    );
+    await client.query('COMMIT');
+    return inserted.rowCount;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  }
+}
 
+async function seed() {
+  await client.connect();
+  try {
+    const adminEmail = (process.env.SEED_ADMIN_EMAIL || 'admin@brightloop.local').trim().toLowerCase();
+    const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'ChangeMe123!';
+    await upsertStaffUser(adminEmail, adminPassword, 'admin', 'Brightloop Administrator');
+    console.log(`✓ Admin account ${adminEmail}`);
     if (process.env.SEED_ADMIN_ONLY === 'true') {
       console.log('✓ Admin-only seed complete');
       return;
     }
 
-    const demoPasswordHash = await bcrypt.hash(
-      `brightloop-v1:${createHash('sha256').update('DemoPass123!', 'utf8').digest('base64')}`,
-      12
-    );
+    await upsertStaffUser('staff@brightloop.local', DEMO_PASSWORD, 'staff', 'Brightloop Staff');
+    const customers = await seedCustomers(await hashPassword(DEMO_PASSWORD));
+    const catalog = await seedCatalog();
+    const plans = await seedPlans();
+    await seedTemplate(plans['MONTHLY-FLEX'].id, catalog);
+    const demoCount = await seedDemoSubscriptions(customers, plans, catalog);
+    console.log(`✓ Catalog, plans, template; ${demoCount} new demo subscriptions`);
 
-    // Insert demo customers
-    const customerIds = [];
-    for (let i = 0; i < 5000; i++) {
-      const result = await client.query(
-        `INSERT INTO customers (legal_name) VALUES ($1)
-         ON CONFLICT (legal_name) DO NOTHING
-         RETURNING id`,
-        [`Demo Company ${i + 1}`]
-      );
-      if (result.rows.length > 0) {
-        customerIds.push(result.rows[0].id);
-      }
+    const scaleCount = await seedScale(Number(process.env.SEED_SCALE || 0), plans, catalog);
+    if (scaleCount) console.log(`✓ ${scaleCount} bulk subscriptions for scale testing`);
+
+    console.log('\nDemo logins:');
+    console.log(`  admin     ${adminEmail} / ${adminPassword}`);
+    console.log(`  staff     staff@brightloop.local / ${DEMO_PASSWORD}`);
+    for (const customer of customers) {
+      console.log(`  customer  ${customer.email} / ${DEMO_PASSWORD}  (${customer.legalName})`);
     }
-    console.log(`✓ Created ${customerIds.length} customers`);
-
-    if (customerIds.length === 0) {
-      console.log('⊘ Customers already exist, skipping seed');
-      return;
-    }
-
-    // Insert demo users
-    for (const customerId of customerIds.slice(0, 100)) {
-      await client.query(
-        `INSERT INTO users (customer_id, email, password_hash, role)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (customer_id, email) DO NOTHING`,
-        [customerId, `user@company${customerId}.local`, demoPasswordHash, 'customer']
-      );
-    }
-    console.log('✓ Created demo users');
-
-    // Insert demo products and variants
-    const productIds = [];
-    for (const customerId of customerIds.slice(0, 500)) {
-      const result = await client.query(
-        `INSERT INTO products (customer_id, sku, name, description)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (customer_id, sku) DO NOTHING
-         RETURNING id`,
-        [customerId, `PROD-${customerId}`, `Product ${customerId}`, 'Demo product']
-      );
-      if (result.rows.length > 0) {
-        const productId = result.rows[0].id;
-        productIds.push(productId);
-        // Create variants
-        for (let v = 0; v < 2; v++) {
-          await client.query(
-            `INSERT INTO product_variants (product_id, variant_key, description)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (product_id, variant_key) DO NOTHING`,
-            [productId, `v${v + 1}`, `Variant ${v + 1}`]
-          );
-        }
-      }
-    }
-    console.log(`✓ Created products and variants`);
-
-    // Insert demo tax rules
-    for (const customerId of customerIds.slice(0, 500)) {
-      await client.query(
-        `INSERT INTO tax_rules (customer_id, jurisdiction, tax_code, rate)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (customer_id, jurisdiction) DO NOTHING`,
-        [customerId, 'US-CA', 'TAX-001', 0.0825]
-      );
-    }
-    console.log('✓ Created tax rules');
-
-    // Insert demo plans
-    const planIds = [];
-    for (const customerId of customerIds.slice(0, 1000)) {
-      const result = await client.query(
-        `INSERT INTO plans (customer_id, plan_number, name, description, min_quantity, auto_renew_allowed)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (customer_id, plan_number) DO NOTHING
-         RETURNING id`,
-        [customerId, `PLAN-${customerId}`, `Demo Plan`, 'Monthly subscription', 1, true]
-      );
-      if (result.rows.length > 0) {
-        const planId = result.rows[0].id;
-        planIds.push(planId);
-        // Create pricing
-        await client.query(
-          `INSERT INTO plan_pricing (plan_id, period, price)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (plan_id, period) DO NOTHING`,
-          [planId, 'monthly', '99.99']
-        );
-      }
-    }
-    console.log(`✓ Created plans and pricing`);
-
-    // Insert demo subscriptions (2 per plan)
-    let subscriptionCount = 0;
-    for (let i = 0; i < planIds.length; i++) {
-      const planId = planIds[i];
-      for (let s = 0; s < 2; s++) {
-        const result = await client.query(
-          `INSERT INTO subscriptions
-           (customer_id, subscription_number, plan_id, period, quantity, unit_price, start_date, next_billing_date, auto_renew, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (customer_id, subscription_number) DO NOTHING
-           RETURNING id`,
-          [
-            customerIds[i % customerIds.length],
-            `SUB-${i}-${s}`,
-            planId,
-            'monthly',
-            '1.00',
-            '99.99',
-            new Date('2024-01-01'),
-            new Date('2024-11-01'),
-            true,
-            'Active'
-          ]
-        );
-        if (result.rows.length > 0) {
-          subscriptionCount++;
-          const subscriptionId = result.rows[0].id;
-
-          // Create invoices for each subscription
-          for (let inv = 0; inv < 5; inv++) {
-            const invoiceResult = await client.query(
-              `INSERT INTO invoices
-               (customer_id, subscription_id, invoice_number, period_start, period_end,
-                subtotal, tax_amount, discount_total, total, issued_date, due_date, status, trace)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-               ON CONFLICT (subscription_id, period_start) DO NOTHING
-               RETURNING id`,
-              [
-                customerIds[i % customerIds.length],
-                subscriptionId,
-                `INV-${subscriptionId}-${inv}`,
-                new Date(2024, 0 + inv, 1),
-                new Date(2024, 1 + inv, 1),
-                '99.99',
-                '8.25',
-                '0.00',
-                '108.24',
-                new Date(2024, 0 + inv, 1),
-                new Date(2024, 1 + inv, 15),
-                inv < 3 ? 'Paid' : 'Confirmed',
-                JSON.stringify({ applied_rules: [], trace: [] })
-              ]
-            );
-
-            if (invoiceResult.rows.length > 0) {
-              const invoiceId = invoiceResult.rows[0].id;
-
-              // Add line items
-              await client.query(
-                `INSERT INTO invoice_line_items
-                 (invoice_id, description, quantity, unit_price, line_total, tax_rate, tax_amount, discount_percent, discount_amount)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-                [invoiceId, 'Monthly Service', '1.00', '99.99', '99.99', 0.0825, '8.25', 0, '0.00']
-              );
-
-              // Add payment if invoice is paid
-              if (inv < 3) {
-                await client.query(
-                  `INSERT INTO payments (invoice_id, customer_id, amount, payment_method, status)
-                   VALUES ($1, $2, $3, $4, $5)`,
-                  [invoiceId, customerIds[i % customerIds.length], '108.24', 'card', 'Received']
-                );
-              }
-            }
-          }
-        }
-      }
-    }
-    console.log(`✓ Created ${subscriptionCount} subscriptions with invoices and payments`);
-
-    // Insert demo discount rules
-    for (const customerId of customerIds.slice(0, 100)) {
-      const result = await client.query(
-        `INSERT INTO discount_rules (customer_id, name, discount_percent, description, is_active)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT DO NOTHING
-         RETURNING id`,
-        [customerId, 'Demo 10% Discount', 10, 'Early bird discount', true]
-      );
-    }
-    console.log('✓ Created discount rules');
-
-    console.log('✓ Seed complete');
-  } catch (err) {
-    console.error('Seed failed:', err.message);
-    process.exit(1);
   } finally {
     await client.end();
   }
 }
 
-seed();
+seed().catch((error) => {
+  console.error('Seed failed:', error);
+  process.exitCode = 1;
+});
