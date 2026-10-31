@@ -45,16 +45,20 @@ describe('renewal chase and admin outbox', () => {
       .toEqual({ pre_due: 0, due: 0, overdue_7: 0 });
     const entries = await pool.query<{ count: string }>('SELECT count(*)::text AS count FROM renewal_chase_log');
     expect(Number(entries.rows[0].count)).toBe(3);
-    const outbox = await pool.query<{ count: string }>('SELECT count(*)::text AS count FROM outbox_emails');
+    const outbox = await pool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM outbox_emails WHERE recipient LIKE '%@billing.test'",
+    );
     expect(Number(outbox.rows[0].count)).toBe(3);
   });
 
   it('validates asOf and paginates newest-first outbox records', async () => {
     expect((await admin.post('/api/renewals/chase/run?asOf=2026-02-30')).status).toBe(400);
+    // Other suites (e.g. password reset) also write outbox rows, so compare against the live total.
+    const all = await pool.query<{ count: string }>('SELECT count(*)::text AS count FROM outbox_emails');
     const first = await admin.get('/api/admin/outbox?page=1&pageSize=2');
     expect(first.status).toBe(200);
     expect(first.body.data).toHaveLength(2);
-    expect(first.body.meta).toMatchObject({ page: 1, pageSize: 2, total: 3 });
+    expect(first.body.meta).toMatchObject({ page: 1, pageSize: 2, total: Number(all.rows[0].count) });
     expect(first.body.data[0].id).toBeGreaterThan(first.body.data[1].id);
     const filtered = await admin.get('/api/admin/outbox?recipient=due%40billing.test');
     expect(filtered.body.meta.total).toBe(1);
