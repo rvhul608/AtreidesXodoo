@@ -1,210 +1,295 @@
 #!/usr/bin/env node
 /**
- * Seed script: populates database with demo data (~5000 customers, ~10000 subscriptions/invoices/payments).
- * Idempotent: uses ON CONFLICT DO NOTHING for re-entrancy.
+ * Idempotent, set-based demo seed. It creates 5,000 demo customers, 10,000
+ * subscriptions, invoice/payment history, and labelled leakage-test anomalies.
  */
 
+import crypto from 'node:crypto';
+
 import pg from 'pg';
-import crypto from 'crypto';
 
 const client = new pg.Client({
   connectionString: process.env.DATABASE_URL || 'postgresql://brightloop:password@localhost:5432/brightloop_dev',
 });
 
+const DEMO_CUSTOMERS = "legal_name ~ '^Demo Company [0-9]+$'";
+const DEMO_SUBSCRIPTIONS = "subscription_number LIKE 'DEMO-SUB-%'";
+const DEMO_INVOICES = "invoice_number LIKE 'DEMO-INV-%'";
+const demoPasswordHash = crypto.createHash('sha256').update('password').digest('hex');
+
+async function runStep(name, sql, values = []) {
+  const result = await client.query(sql, values);
+  console.log(`✓ ${name}: ${result.rowCount ?? 0} row(s)`);
+}
+
 async function seed() {
   try {
     await client.connect();
-    console.log('Connected to database');
+    await client.query('BEGIN');
 
-    // Insert demo customers
-    const customerIds = [];
-    for (let i = 0; i < 5000; i++) {
-      const result = await client.query(
-        `INSERT INTO customers (legal_name) VALUES ($1)
-         ON CONFLICT (legal_name) DO NOTHING
-         RETURNING id`,
-        [`Demo Company ${i + 1}`]
-      );
-      if (result.rows.length > 0) {
-        customerIds.push(result.rows[0].id);
-      }
-    }
-    console.log(`✓ Created ${customerIds.length} customers`);
+    await runStep('customers', `
+      INSERT INTO customers (legal_name)
+      SELECT 'Demo Company ' || number
+      FROM generate_series(1, 5000) AS number
+      ON CONFLICT (legal_name) DO NOTHING
+    `);
 
-    if (customerIds.length === 0) {
-      console.log('⊘ Customers already exist, skipping seed');
-      return;
-    }
+    await runStep('demo administrators', `
+      INSERT INTO users (customer_id, email, password_hash, role)
+      SELECT id, 'admin@company' || id || '.local', $1, 'admin'
+      FROM customers
+      WHERE ${DEMO_CUSTOMERS}
+      ON CONFLICT (customer_id, email) DO NOTHING
+    `, [demoPasswordHash]);
 
-    // Insert demo users
-    for (const customerId of customerIds.slice(0, 100)) {
-      const hashedPassword = crypto.createHash('sha256').update('password').digest('hex');
-      await client.query(
-        `INSERT INTO users (customer_id, email, password_hash, role)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (customer_id, email) DO NOTHING`,
-        [customerId, `admin@company${customerId}.local`, hashedPassword, 'admin']
-      );
-    }
-    console.log('✓ Created demo users');
+    await runStep('products', `
+      INSERT INTO products (customer_id, sku, name, description)
+      SELECT id, 'DEMO-PROD-' || id, 'Brightloop Subscription',
+        'Seeded subscription product with an Odoo add-on variant'
+      FROM customers
+      WHERE ${DEMO_CUSTOMERS}
+      ON CONFLICT (customer_id, sku) DO NOTHING
+    `);
 
-    // Insert demo products and variants
-    const productIds = [];
-    for (const customerId of customerIds.slice(0, 500)) {
-      const result = await client.query(
-        `INSERT INTO products (customer_id, sku, name, description)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (customer_id, sku) DO NOTHING
-         RETURNING id`,
-        [customerId, `PROD-${customerId}`, `Product ${customerId}`, 'Demo product']
-      );
-      if (result.rows.length > 0) {
-        const productId = result.rows[0].id;
-        productIds.push(productId);
-        // Create variants
-        for (let v = 0; v < 2; v++) {
-          await client.query(
-            `INSERT INTO product_variants (product_id, variant_key, description)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (product_id, variant_key) DO NOTHING`,
-            [productId, `v${v + 1}`, `Variant ${v + 1}`]
-          );
-        }
-      }
-    }
-    console.log(`✓ Created products and variants`);
+    await runStep('product variants', `
+      INSERT INTO product_variants (product_id, variant_key, description)
+      SELECT products.id, variants.variant_key, variants.description
+      FROM products
+      CROSS JOIN (VALUES
+        ('standard', 'Standard subscription'),
+        ('odoo-addon', 'Odoo add-on (+560)')
+      ) AS variants(variant_key, description)
+      WHERE products.sku LIKE 'DEMO-PROD-%'
+      ON CONFLICT (product_id, variant_key) DO NOTHING
+    `);
 
-    // Insert demo tax rules
-    for (const customerId of customerIds.slice(0, 500)) {
-      await client.query(
-        `INSERT INTO tax_rules (customer_id, jurisdiction, tax_code, rate)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (customer_id, jurisdiction) DO NOTHING`,
-        [customerId, 'US-CA', 'TAX-001', 0.0825]
-      );
-    }
-    console.log('✓ Created tax rules');
+    await runStep('tax rules', `
+      INSERT INTO tax_rules (customer_id, jurisdiction, tax_code, rate)
+      SELECT id, 'DEMO-LOCAL', 'DEMO-TAX', 0.0825
+      FROM customers
+      WHERE ${DEMO_CUSTOMERS}
+      ON CONFLICT (customer_id, jurisdiction) DO NOTHING
+    `);
 
-    // Insert demo plans
-    const planIds = [];
-    for (const customerId of customerIds.slice(0, 1000)) {
-      const result = await client.query(
-        `INSERT INTO plans (customer_id, plan_number, name, description, min_quantity, auto_renew_allowed)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (customer_id, plan_number) DO NOTHING
-         RETURNING id`,
-        [customerId, `PLAN-${customerId}`, `Demo Plan`, 'Monthly subscription', 1, true]
-      );
-      if (result.rows.length > 0) {
-        const planId = result.rows[0].id;
-        planIds.push(planId);
-        // Create pricing
-        await client.query(
-          `INSERT INTO plan_pricing (plan_id, period, price)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (plan_id, period) DO NOTHING`,
-          [planId, 'monthly', '99.99']
-        );
-      }
-    }
-    console.log(`✓ Created plans and pricing`);
+    await runStep('plans', `
+      INSERT INTO plans (customer_id, plan_number, name, description, min_quantity, auto_renew_allowed)
+      SELECT id, 'DEMO-PLAN-' || id, 'Brightloop Monthly',
+        'Monthly seeded plan', 1, true
+      FROM customers
+      WHERE ${DEMO_CUSTOMERS}
+      ON CONFLICT (customer_id, plan_number) DO NOTHING
+    `);
 
-    // Insert demo subscriptions (2 per plan)
-    let subscriptionCount = 0;
-    for (let i = 0; i < planIds.length; i++) {
-      const planId = planIds[i];
-      for (let s = 0; s < 2; s++) {
-        const result = await client.query(
-          `INSERT INTO subscriptions
-           (customer_id, subscription_number, plan_id, period, quantity, unit_price, start_date, next_billing_date, auto_renew, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (customer_id, subscription_number) DO NOTHING
-           RETURNING id`,
-          [
-            customerIds[i % customerIds.length],
-            `SUB-${i}-${s}`,
-            planId,
-            'monthly',
-            '1.00',
-            '99.99',
-            new Date('2024-01-01'),
-            new Date('2024-11-01'),
-            true,
-            'Active'
-          ]
-        );
-        if (result.rows.length > 0) {
-          subscriptionCount++;
-          const subscriptionId = result.rows[0].id;
+    await runStep('plan pricing', `
+      INSERT INTO plan_pricing (plan_id, period, price)
+      SELECT plans.id, 'monthly', 99.99
+      FROM plans
+      WHERE plans.plan_number LIKE 'DEMO-PLAN-%'
+      ON CONFLICT (plan_id, period) DO NOTHING
+    `);
 
-          // Create invoices for each subscription
-          for (let inv = 0; inv < 5; inv++) {
-            const invoiceResult = await client.query(
-              `INSERT INTO invoices
-               (customer_id, subscription_id, invoice_number, period_start, period_end,
-                subtotal, tax_amount, discount_total, total, issued_date, due_date, status, trace)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-               ON CONFLICT (subscription_id, period_start) DO NOTHING
-               RETURNING id`,
-              [
-                customerIds[i % customerIds.length],
-                subscriptionId,
-                `INV-${subscriptionId}-${inv}`,
-                new Date(2024, 0 + inv, 1),
-                new Date(2024, 1 + inv, 1),
-                '99.99',
-                '8.25',
-                '0.00',
-                '108.24',
-                new Date(2024, 0 + inv, 1),
-                new Date(2024, 1 + inv, 15),
-                inv < 3 ? 'Paid' : 'Confirmed',
-                JSON.stringify({ applied_rules: [], trace: [] })
-              ]
-            );
+    await runStep('subscriptions', `
+      INSERT INTO subscriptions (
+        customer_id, subscription_number, plan_id, period, quantity, unit_price,
+        start_date, next_billing_date, auto_renew, status
+      )
+      SELECT plans.customer_id,
+        'DEMO-SUB-' || plans.id || '-' || slots.number,
+        plans.id,
+        'monthly',
+        '1.00',
+        '99.99',
+        CURRENT_DATE - INTERVAL '120 days',
+        CURRENT_DATE + (((plans.id + slots.number) % 28)::integer),
+        true,
+        CASE
+          WHEN (plans.id + slots.number) % 20 = 0 THEN 'Paused'
+          WHEN (plans.id + slots.number) % 37 = 0 THEN 'Cancelled'
+          ELSE 'Active'
+        END
+      FROM plans
+      CROSS JOIN (VALUES (1), (2)) AS slots(number)
+      WHERE plans.plan_number LIKE 'DEMO-PLAN-%'
+      ON CONFLICT (customer_id, subscription_number) DO NOTHING
+    `);
 
-            if (invoiceResult.rows.length > 0) {
-              const invoiceId = invoiceResult.rows[0].id;
+    await runStep('subscription items', `
+      INSERT INTO subscription_items (subscription_id, product_variant_id, quantity, unit_price)
+      SELECT subscriptions.id, variants.id, '1.00', '99.99'
+      FROM subscriptions
+      JOIN products ON products.customer_id = subscriptions.customer_id
+        AND products.sku LIKE 'DEMO-PROD-%'
+      JOIN product_variants AS variants ON variants.product_id = products.id
+        AND variants.variant_key = 'standard'
+      WHERE ${DEMO_SUBSCRIPTIONS}
+        AND NOT EXISTS (
+          SELECT 1 FROM subscription_items
+          WHERE subscription_items.subscription_id = subscriptions.id
+        )
+    `);
 
-              // Add line items
-              await client.query(
-                `INSERT INTO invoice_line_items
-                 (invoice_id, description, quantity, unit_price, line_total, tax_rate, tax_amount, discount_percent, discount_amount)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-                [invoiceId, 'Monthly Service', '1.00', '99.99', '99.99', 0.0825, '8.25', 0, '0.00']
-              );
+    await runStep('invoice history', `
+      INSERT INTO invoices (
+        customer_id, subscription_id, invoice_number, period_start, period_end,
+        subtotal, tax_amount, discount_total, total, issued_date, due_date, status, trace
+      )
+      SELECT subscriptions.customer_id,
+        subscriptions.id,
+        'DEMO-INV-' || subscriptions.id || '-' || cycles.number,
+        (date_trunc('month', CURRENT_DATE) - (cycles.number * INTERVAL '1 month'))::date,
+        (date_trunc('month', CURRENT_DATE) - ((cycles.number - 1) * INTERVAL '1 month') - INTERVAL '1 day')::date,
+        '99.99', '8.25', '0.00', '108.24',
+        (date_trunc('month', CURRENT_DATE) - (cycles.number * INTERVAL '1 month'))::date,
+        (date_trunc('month', CURRENT_DATE) - (cycles.number * INTERVAL '1 month') + INTERVAL '15 days')::date,
+        CASE WHEN cycles.number = 3 THEN 'Paid' ELSE 'Confirmed' END,
+        jsonb_build_object('seeded', true, 'cycle', cycles.number)
+      FROM subscriptions
+      CROSS JOIN generate_series(1, 3) AS cycles(number)
+      WHERE ${DEMO_SUBSCRIPTIONS}
+      ON CONFLICT (subscription_id, period_start) DO NOTHING
+    `);
 
-              // Add payment if invoice is paid
-              if (inv < 3) {
-                await client.query(
-                  `INSERT INTO payments (invoice_id, customer_id, amount, payment_method, status)
-                   VALUES ($1, $2, $3, $4, $5)`,
-                  [invoiceId, customerIds[i % customerIds.length], '108.24', 'card', 'Received']
-                );
-              }
-            }
-          }
-        }
-      }
-    }
-    console.log(`✓ Created ${subscriptionCount} subscriptions with invoices and payments`);
+    await runStep('invoice line items', `
+      INSERT INTO invoice_line_items (
+        invoice_id, description, quantity, unit_price, line_total,
+        tax_rate, tax_amount, discount_percent, discount_amount
+      )
+      SELECT invoices.id, 'Brightloop monthly service', '1.00', '99.99', '99.99',
+        0.0825, '8.25', '0.00', '0.00'
+      FROM invoices
+      WHERE ${DEMO_INVOICES}
+        AND NOT EXISTS (
+          SELECT 1 FROM invoice_line_items
+          WHERE invoice_line_items.invoice_id = invoices.id
+        )
+    `);
 
-    // Insert demo discount rules
-    for (const customerId of customerIds.slice(0, 100)) {
-      const result = await client.query(
-        `INSERT INTO discount_rules (customer_id, name, discount_percent, description, is_active)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT DO NOTHING
-         RETURNING id`,
-        [customerId, 'Demo 10% Discount', 10, 'Early bird discount', true]
-      );
-    }
-    console.log('✓ Created discount rules');
+    await runStep('payments', `
+      INSERT INTO payments (invoice_id, customer_id, amount, payment_method, status, notes)
+      SELECT invoices.id,
+        invoices.customer_id,
+        CASE
+          WHEN invoices.status = 'Paid' THEN '108.24'::numeric
+          ELSE '54.12'::numeric
+        END,
+        'local-demo',
+        'Received',
+        'Seeded payment'
+      FROM invoices
+      JOIN subscriptions ON subscriptions.id = invoices.subscription_id
+      WHERE ${DEMO_INVOICES}
+        AND (
+          invoices.status = 'Paid'
+          OR (invoices.status = 'Confirmed' AND subscriptions.id % 10 = 0)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM payments
+          WHERE payments.invoice_id = invoices.id AND payments.notes = 'Seeded payment'
+        )
+    `);
 
-    console.log('✓ Seed complete');
-  } catch (err) {
-    console.error('Seed failed:', err.message);
-    process.exit(1);
+    await runStep('discount rules', `
+      INSERT INTO discount_rules (customer_id, name, discount_percent, description, is_active)
+      SELECT customers.id, 'Demo expected 10% discount', 10.00,
+        'Used by the seeded missing-discount leakage scenario', true
+      FROM customers
+      WHERE ${DEMO_CUSTOMERS}
+        AND customers.id = (
+          SELECT min(id) FROM customers WHERE ${DEMO_CUSTOMERS}
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM discount_rules
+          WHERE discount_rules.customer_id = customers.id
+            AND discount_rules.name = 'Demo expected 10% discount'
+        )
+    `);
+
+    await runStep('missing-invoice anomaly subscription', `
+      INSERT INTO subscriptions (
+        customer_id, subscription_number, plan_id, period, quantity, unit_price,
+        start_date, next_billing_date, auto_renew, status
+      )
+      SELECT plans.customer_id, 'DEMO-ANOM-MISSING-INVOICE', plans.id, 'monthly',
+        '1.00', '99.99', CURRENT_DATE - INTERVAL '90 days', CURRENT_DATE - INTERVAL '7 days',
+        true, 'Active'
+      FROM plans
+      WHERE plans.customer_id = (SELECT min(id) FROM customers WHERE ${DEMO_CUSTOMERS})
+        AND plans.plan_number LIKE 'DEMO-PLAN-%'
+      ON CONFLICT (customer_id, subscription_number) DO NOTHING
+    `);
+
+    await runStep('duplicate-invoice anomaly', `
+      WITH targets AS (
+        SELECT invoices.id
+        FROM invoices
+        JOIN subscriptions ON subscriptions.id = invoices.subscription_id
+        WHERE ${DEMO_SUBSCRIPTIONS}
+          AND invoices.period_start = (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date
+        ORDER BY invoices.id
+        LIMIT 2
+      )
+      UPDATE invoices
+      SET invoice_number = 'DEMO-DUPLICATE-INVOICE'
+      FROM targets
+      WHERE invoices.id = targets.id
+    `);
+
+    await runStep('missing-discount anomaly', `
+      WITH target AS (
+        SELECT invoices.id
+        FROM invoices
+        JOIN subscriptions ON subscriptions.id = invoices.subscription_id
+        WHERE ${DEMO_INVOICES}
+          AND subscriptions.customer_id = (SELECT min(id) FROM customers WHERE ${DEMO_CUSTOMERS})
+        ORDER BY invoices.id
+        LIMIT 1
+      )
+      UPDATE invoices
+      SET trace = jsonb_build_object(
+        'seed_anomaly', 'missing_discount',
+        'expected_discount_percent', '10.00'
+      )
+      FROM target
+      WHERE invoices.id = target.id
+    `);
+
+    await runStep('unmatched-payment anomaly', `
+      WITH target AS (
+        SELECT invoices.id, invoices.customer_id
+        FROM invoices
+        WHERE ${DEMO_INVOICES}
+        ORDER BY invoices.id DESC
+        LIMIT 1
+      ), cancelled AS (
+        UPDATE invoices
+        SET status = 'Cancelled'
+        FROM target
+        WHERE invoices.id = target.id
+        RETURNING invoices.id, invoices.customer_id
+      )
+      INSERT INTO payments (invoice_id, customer_id, amount, payment_method, status, notes)
+      SELECT id, customer_id, '108.24', 'local-demo', 'Received', 'Seeded unmatched payment'
+      FROM cancelled
+      WHERE NOT EXISTS (
+        SELECT 1 FROM payments
+        WHERE payments.invoice_id = cancelled.id
+          AND payments.notes = 'Seeded unmatched payment'
+      )
+    `);
+
+    const counts = await client.query(`
+      SELECT
+        (SELECT count(*) FROM customers WHERE ${DEMO_CUSTOMERS}) AS customers,
+        (SELECT count(*) FROM subscriptions WHERE ${DEMO_SUBSCRIPTIONS}) AS subscriptions,
+        (SELECT count(*) FROM invoices WHERE ${DEMO_INVOICES}) AS invoices
+    `);
+
+    await client.query('COMMIT');
+    console.log(`✓ Seed complete: ${counts.rows[0].customers} customers, ${counts.rows[0].subscriptions} subscriptions, ${counts.rows[0].invoices} invoices`);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    console.error('Seed failed:', error instanceof Error ? error.message : error);
+    process.exitCode = 1;
   } finally {
     await client.end();
   }

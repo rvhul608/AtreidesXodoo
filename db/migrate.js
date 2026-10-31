@@ -64,11 +64,16 @@ async function migrate() {
 
     // Get all migration files
     if (!fs.existsSync(migrationsDir)) {
-      console.log('No migrations directory found. Creating schema from db/schema.sql');
+      const baselineName = '0000-schema.sql';
       const schemaPath = path.join(__dirname, 'schema.sql');
-      if (fs.existsSync(schemaPath)) {
+      if (applied.has(baselineName)) {
+        console.log(`⊘ Skipped (already applied): ${baselineName}`);
+      } else if (fs.existsSync(schemaPath)) {
+        console.log('No migrations directory found. Applying baseline schema from db/schema.sql');
         const schemaSql = fs.readFileSync(schemaPath, 'utf-8');
-        await applyMigration('0000-schema.sql', schemaSql);
+        await applyMigration(baselineName, schemaSql);
+      } else {
+        throw new Error('No migrations directory or baseline schema found');
       }
     } else {
       const files = fs.readdirSync(migrationsDir)
