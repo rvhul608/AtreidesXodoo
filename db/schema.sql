@@ -177,9 +177,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   status TEXT DEFAULT 'Active' CHECK (status IN ('Active', 'Paused', 'Cancelled')),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(customer_id, subscription_number),
-  INDEX on status,
-  INDEX on next_billing_date WHERE status = 'Active'
+  UNIQUE(customer_id, subscription_number)
 );
 
 -- Subscription history (for audit/reporting)
@@ -223,10 +221,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   trace JSONB,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(subscription_id, period_start),
-  INDEX on status,
-  INDEX on due_date,
-  INDEX on customer_id
+  UNIQUE(subscription_id, period_start)
 );
 
 -- Invoice line items (snapshot of prices/taxes/discounts)
@@ -254,8 +249,7 @@ CREATE TABLE IF NOT EXISTS payments (
   status TEXT NOT NULL DEFAULT 'Received' CHECK (status IN ('Received', 'Failed', 'Reversed')),
   transaction_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   notes TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  INDEX on invoice_id
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Discount rules
