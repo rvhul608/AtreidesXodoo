@@ -2,7 +2,7 @@
 
 Odoo x Make-A-Ton 9.0 project: a subscription management system for the fictional Brightloop Software. Express + TypeScript API (`apps/api`), local Postgres, no third-party services.
 
-## Backend (Section A) quick start
+## Backend quick start
 
 Requirements: Node 18+, a local Postgres with a `brightloop` role (password `password`) that owns `brightloop_dev` and `brightloop_test`.
 
@@ -23,7 +23,7 @@ npm run typecheck
 npm test                      # resets and migrates brightloop_test, then runs the API tests
 ```
 
-## Section A endpoints
+## Endpoints
 
 All responses are `{ data, meta? }` (lists: `meta = { page, pageSize, total }`, `pageSize` max 100); errors are `{ error: { code, message, details? } }`. Auth is an httpOnly `session` cookie. Roles: `admin`, `staff`, `customer`.
 
@@ -39,6 +39,10 @@ All responses are `{ data, meta? }` (lists: `meta = { page, pageSize, total }`, 
 | Subscriptions | `GET/POST /api/subscriptions`, `POST /api/subscriptions/from-template`, `GET/PATCH/DELETE /api/subscriptions/:id`, `POST /api/subscriptions/:id/transition`, `POST /api/subscriptions/:id/renew`, `POST /api/subscriptions/auto-close/run` | admin, staff |
 | Portal | `GET /api/portal/subscriptions[/:id]`, `POST /api/portal/subscriptions/:id/{pause,resume,renew,close}`, `GET /api/portal/invoices[/:id]` | customer (own rows only) |
 | Renewals | `GET /api/renewals/queue`, `POST /api/renewals/:id/renew`, `POST /api/renewals/chase/run` | admin, staff |
+| Billing | `POST /api/billing/run?asOf=`, `GET /api/billing/preview/:subscriptionId` | admin, staff |
+| Invoices | `GET /api/invoices[/:id]`, `POST /api/invoices/:id/{confirm,cancel,send}`, `GET /api/invoices/:id/print` | admin, staff |
+| Payments | `POST/GET /api/invoices/:id/payments`, `GET /api/payments`, `GET /api/payments/summary` | admin, staff |
+| Discounts | `GET/POST /api/discounts`, `GET/PATCH/DELETE /api/discounts/:id`, `POST /api/discounts/:id/{activate,deactivate}` | admin |
 | Outbox | `GET /api/admin/outbox` | admin |
 
-How each module works, and why: `docs/walkthroughs/` (`auth`, `catalog`, `plans`, `subscriptions`, `portal`, `renewals`).
+How each module works, and why: `docs/walkthroughs/` (`auth`, `catalog`, `plans`, `subscriptions`, `portal`, `renewals`, `billing`, `invoices`, `discounts`, `payments`).
