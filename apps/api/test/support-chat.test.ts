@@ -73,6 +73,14 @@ describe('support knowledge and chat', () => {
     expect(foreignInvoice.body.data).toEqual({ message: 'Invoice not found.', items: [] });
     const ownInvoice = await otherCustomer.post('/api/support/message').send({ topic: 'invoice_details', invoiceId: foreignId });
     expect(ownInvoice.body.data.items[0].invoice_number).toBe('SUPPORT-OTHER-INVOICE');
+    const draftInvoices = await pool.query<{ id: string }>(`
+      INSERT INTO invoices (customer_id, subscription_id, invoice_number, period_start, period_end,
+        subtotal, tax_amount, total, issued_date, due_date, status)
+      VALUES ($1, $2, 'SUPPORT-DRAFT-INVOICE', '2026-02-01', '2026-02-28',
+        100, 0, 100, '2026-02-01', '2026-03-01', 'Draft') RETURNING id
+    `, [otherCustomerId, second.body.data.id]);
+    const hiddenDraft = await otherCustomer.post('/api/support/message').send({ topic: 'invoice_details', invoiceId: Number(draftInvoices.rows[0].id) });
+    expect(hiddenDraft.body.data).toEqual({ message: 'Invoice not found.', items: [] });
     const unpaid = await customer.post('/api/support/message').send({ topic: 'unpaid_invoices' });
     expect(unpaid.body.data.items).toEqual([]);
   });

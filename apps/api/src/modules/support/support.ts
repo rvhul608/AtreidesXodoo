@@ -53,7 +53,7 @@ export async function answerSupportRequest(customerId: number, input: SupportReq
   const result = await pool.query(`
     SELECT id::text, invoice_number, status, due_date::text, subtotal::text,
       tax_amount::text, discount_total::text, total::text
-    FROM invoices WHERE customer_id = $1 AND id = $2
+    FROM invoices WHERE customer_id = $1 AND id = $2 AND status <> 'Draft'
   `, [customerId, input.invoiceId]);
   return {
     message: result.rows.length ? 'Here is your invoice breakdown.' : 'Invoice not found.',
