@@ -12,6 +12,7 @@ import userRoutes from './modules/users/routes.js';
 import renewalRoutes from './modules/renewals/routes.js';
 import outboxRoutes from './modules/outbox/routes.js';
 import catalogRoutes from './modules/catalog/routes.js';
+import planRoutes from './modules/plans/routes.js';
 
 export const app = express();
 
@@ -45,6 +46,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/renewals', renewalRoutes);
 app.use('/api/admin/outbox', outboxRoutes);
 app.use('/api', catalogRoutes);
+app.use('/api/plans', planRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
