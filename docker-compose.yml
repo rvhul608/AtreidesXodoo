@@ -1,0 +1,46 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: brightloop_postgres
+    environment:
+      POSTGRES_DB: brightloop_dev
+      POSTGRES_USER: brightloop
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brightloop -d brightloop_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - brightloop
+
+  # API service (optional, for containerized dev)
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: apps/api/Dockerfile
+  #   container_name: brightloop_api
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     DATABASE_URL: postgresql://brightloop:password@postgres:5432/brightloop_dev
+  #     NODE_ENV: development
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   networks:
+  #     - brightloop
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  brightloop:
+    driver: bridge
