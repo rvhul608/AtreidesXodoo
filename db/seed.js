@@ -4,7 +4,8 @@
  *
  *   SEED_ADMIN_ONLY=true npm run seed   -> only the admin account
  *   npm run seed                        -> admin, staff, demo customers, catalog, plans, template,
- *                                          and subscriptions in every lifecycle state
+ *                                          a volume discount, and subscriptions in every
+ *                                          lifecycle state (run POST /api/billing/run to invoice them)
  *   SEED_SCALE=10000 npm run seed       -> additionally tops up to N bulk subscriptions for
  *                                          pagination/performance checks
  *
@@ -147,6 +148,16 @@ async function seedTemplate(planId, catalog) {
        (template_id, line_number, product_id, product_variant_id, quantity, quantity_value, unit_price)
      VALUES ($1, 1, $2, $3, 1, 1, 1560), ($1, 2, $4, NULL, 2, 2, 250)`,
     [templateId, catalog.products['ERP-LICENSE'], catalog.odooVariantId, catalog.products['SUPPORT-HOURS']],
+  );
+}
+
+// A volume discount the billing run applies by itself to subscriptions with 2+ seats.
+async function seedDiscount() {
+  await client.query(
+    `INSERT INTO discount_rules (name, description, kind, value, applies_to, min_quantity, usage_limit)
+     SELECT 'Volume 10% (2+ seats)', 'Applied automatically when an invoice has 2 or more units',
+       'percentage', 10, 'subscription', 2, 100
+     WHERE NOT EXISTS (SELECT 1 FROM discount_rules WHERE name = 'Volume 10% (2+ seats)')`,
   );
 }
 
@@ -305,6 +316,7 @@ async function seed() {
     const catalog = await seedCatalog();
     const plans = await seedPlans();
     await seedTemplate(plans['MONTHLY-FLEX'].id, catalog);
+    await seedDiscount();
     const demoCount = await seedDemoSubscriptions(customers, plans, catalog);
     console.log(`✓ Catalog, plans, template; ${demoCount} new demo subscriptions`);
 
