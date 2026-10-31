@@ -5,7 +5,13 @@ export interface OutboxRecord {
   recipient: string;
   subject: string;
   body: string;
+  status: 'pending' | 'sent' | 'failed';
+  resend_id: string | null;
+  send_attempts: number;
+  next_attempt_at: Date;
+  last_error: string | null;
   created_at: Date;
+  sent_at: Date | null;
 }
 
 export async function listOutbox(limit: number, offset: number, recipient?: string) {
@@ -13,7 +19,9 @@ export async function listOutbox(limit: number, offset: number, recipient?: stri
   const params = recipient ? [recipient, limit, offset] : [limit, offset];
   const [rows, count] = await Promise.all([
     pool.query<OutboxRecord>(
-      `SELECT id, recipient, subject, body, created_at FROM outbox_emails ${where}
+      `SELECT id, recipient, subject, body, status, resend_id, send_attempts,
+              next_attempt_at, last_error, created_at, sent_at
+       FROM outbox_emails ${where}
        ORDER BY created_at DESC, id DESC LIMIT $${recipient ? 2 : 1} OFFSET $${recipient ? 3 : 2}`,
       params,
     ),
