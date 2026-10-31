@@ -10,6 +10,7 @@ import { config } from './common/config.js';
 import { db } from './common/db.js';
 import { errorHandler, notFoundHandler } from './common/error-middleware.js';
 import authRoutes from './modules/auth/routes.js';
+import billingRoutes from './modules/billing/routes.js';
 import catalogRoutes from './modules/catalog/routes.js';
 import outboxRoutes from './modules/outbox/routes.js';
 import planRoutes from './modules/plans/routes.js';
@@ -68,6 +69,7 @@ export function createApp(pool: Pool = db): Express {
   app.use('/api/templates', templateRoutes);
   app.use('/api/subscriptions', subscriptionRoutes);
   app.use('/api/portal', portalRoutes);
+  app.use('/api/billing', billingRoutes);
   // Catalog owns /api/products and /api/taxes; mounted last so its auth guard never shadows others.
   app.use('/api', catalogRoutes);
 
