@@ -19,6 +19,7 @@ async function reset() {
     // Drop all tables in reverse order of creation (respect FKs)
     const tables = [
       'discount_usage',
+      'renewal_chase_log',
       'discount_scopes',
       'discount_rules',
       'payments',
