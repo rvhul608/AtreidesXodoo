@@ -14,6 +14,7 @@ import outboxRoutes from './modules/outbox/routes.js';
 import catalogRoutes from './modules/catalog/routes.js';
 import planRoutes from './modules/plans/routes.js';
 import templateRoutes from './modules/templates/routes.js';
+import subscriptionRoutes from './modules/subscriptions/routes.js';
 
 export const app = express();
 
@@ -49,6 +50,7 @@ app.use('/api/admin/outbox', outboxRoutes);
 app.use('/api', catalogRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api/templates', templateRoutes);
+app.use('/api/subscriptions', subscriptionRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
