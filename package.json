@@ -9,9 +9,9 @@
     "apps/web"
   ],
   "scripts": {
-    "install": "npm ci",
     "build": "npm run build --workspaces",
     "typecheck": "npm run typecheck --workspaces",
+    "test": "vitest run --config apps/api/vitest.config.ts",
     "dev": "npm run dev --workspaces",
     "start": "npm run start --workspaces",
     "migrate": "node db/migrate.js",

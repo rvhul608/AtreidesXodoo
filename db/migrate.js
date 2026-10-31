@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Applies the schema baseline once, then numbered SQL migrations in order. */
 
+import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
