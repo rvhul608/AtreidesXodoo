@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { pool } from '../src/common/db.js';
+import { runBilling } from '../src/modules/billing/service.js';
+import { transitionInvoice } from '../src/modules/invoices/service.js';
 import {
   loginStaff,
   signupCustomer,
@@ -201,5 +203,53 @@ describe('recurring billing', () => {
       '2026-01-01',
       '2026-01-01',
     ]);
+  });
+
+  it('bills multiple batches with eight workers, catches up periods, and respects a shared discount cap', async () => {
+    await pool.query('TRUNCATE customers RESTART IDENTITY CASCADE');
+    await pool.query('TRUNCATE discount_rules CASCADE');
+    const customer = await pool.query<{ id: string }>("INSERT INTO customers (legal_name) VALUES ('Batch billing customer') RETURNING id");
+    const { productId } = await createProduct(pool, 'BATCH-PRICE', '100.00');
+    const planId = await createPlan(pool, 'BATCH-PLAN');
+    const customerId = customer.rows[0].id;
+    await pool.query(`INSERT INTO subscriptions (customer_id, plan_id, period, quantity, unit_price, start_date,
+      next_billing_date, status) SELECT $1, $2, 'monthly', 1, 100, '2026-01-01', '2026-01-01', 'Active'
+      FROM generate_series(1, 205)`, [customerId, planId]);
+    await pool.query(`INSERT INTO subscription_items (subscription_id, product_id, description, quantity, unit_price, amount, tax_amount)
+      SELECT id, $1, 'Batch line', 1, 100, 100, 0 FROM subscriptions WHERE customer_id=$2`, [productId, customerId]);
+    await pool.query(`INSERT INTO discount_rules (name, kind, value, applies_to, usage_limit)
+      VALUES ('Batch limited', 'percentage', 10, 'subscription', 37),
+        ('Batch unlimited', 'percentage', 5, 'subscription', NULL)`);
+    const results = await Promise.all([
+      runBilling('2026-02-01', { id: null }, { concurrency: 8, batchSize: 25 }),
+      runBilling('2026-02-01', { id: null }, { concurrency: 8, batchSize: 25 }),
+    ]);
+    expect(results.flatMap((r) => r.failed)).toEqual([]);
+    expect(results.reduce((sum, r) => sum + r.created, 0)).toBe(410);
+    const counts = await pool.query<{ name: string; times_used: number }>('SELECT name, times_used FROM discount_rules ORDER BY id');
+    expect(counts.rows).toEqual([{ name: 'Batch limited', times_used: 37 }, { name: 'Batch unlimited', times_used: 410 }]);
+    const totals = await pool.query('SELECT total, count(*)::int AS count FROM invoices GROUP BY total ORDER BY total');
+    expect(totals.rows).toEqual([{ total: '85.50', count: 37 }, { total: '95.00', count: 373 }]);
+    const existing = await pool.query<{ id: string }>('SELECT id FROM subscriptions ORDER BY id LIMIT 1');
+    await pool.query("UPDATE subscriptions SET next_billing_date='2026-02-01' WHERE id=$1", [existing.rows[0].id]);
+    const rerun = await runBilling('2026-02-01', { id: null });
+    expect(rerun.created).toBe(0);
+    expect(rerun.skippedExisting).toBe(1);
+    const dates = await pool.query("SELECT DISTINCT next_billing_date::text FROM subscriptions");
+    expect(dates.rows).toEqual([{ next_billing_date: '2026-03-01' }]);
+    const actor = await pool.query<{ id: string }>(`INSERT INTO users (email, password_hash, role)
+      VALUES ('batch-cancel@test.local', 'unused-test-hash', 'admin') RETURNING id`);
+    const discounted = await pool.query<{ id: string }>("SELECT id FROM invoices WHERE total=85.50 ORDER BY id LIMIT 1");
+    const [, nextRun] = await Promise.all([
+      transitionInvoice(Number(discounted.rows[0].id), 'cancel', { id: Number(actor.rows[0].id) }),
+      runBilling('2026-03-01', { id: null }, { concurrency: 8, batchSize: 25 }),
+    ]);
+    expect(nextRun.failed).toEqual([]);
+    expect(nextRun.created).toBe(205);
+    const usage = await pool.query<{ times_used: number; actual: number }>(`SELECT r.times_used,
+      (SELECT COUNT(*)::int FROM discount_usage u WHERE u.discount_rule_id=r.id) AS actual
+      FROM discount_rules r WHERE name='Batch limited'`);
+    expect(usage.rows[0].times_used).toBeLessThanOrEqual(37);
+    expect(usage.rows[0].times_used).toBe(usage.rows[0].actual);
   });
 });

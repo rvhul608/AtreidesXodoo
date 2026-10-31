@@ -17,7 +17,8 @@
     "migrate": "node db/migrate.js",
     "migrate:reset": "node db/reset.js && node db/migrate.js",
     "seed": "node db/seed.js",
-    "health-check": "node scripts/health-check.js"
+    "health-check": "node scripts/health-check.js",
+    "benchmark:billing": "tsx scripts/benchmark-billing.ts"
   },
   "dependencies": {},
   "devDependencies": {

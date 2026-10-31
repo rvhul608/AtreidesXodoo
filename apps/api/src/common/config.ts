@@ -6,8 +6,11 @@ const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
   // Resend integration (optional; the outbox stays database-backed when absent).
-  MAIL_FROM: z.string().min(3).default('noreply@brightloop.local'),
-  RESEND_API_KEY: z.string().min(1).optional(),
+  MAIL_FROM: z.string().trim().default(''),
+  RESEND_API_KEY: z.preprocess(
+    (value) => typeof value === 'string' ? value.trim() || undefined : value,
+    z.string().min(1).optional(),
+  ),
   OUTBOX_DISPATCH_INTERVAL_MS: z.coerce.number().int().min(1000).default(30000),
 });
 

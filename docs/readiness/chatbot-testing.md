@@ -1,5 +1,9 @@
 # Chatbot test findings
 
+**Historical evaluation:** this document describes the removed model implementation. Current chat
+uses deterministic published-article retrieval and verified account lookups. See
+[current support walkthrough](../walkthroughs/support.md) and `apps/api/test/support-chat.test.ts`.
+
 Tested 2026-10-31 on the local Qwen3 0.6B Q8 model with CPU inference and an isolated PostgreSQL 18 database. These tests do not establish production readiness.
 
 ## Access and integration

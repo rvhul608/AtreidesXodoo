@@ -3,6 +3,7 @@ import { AuthProvider, homeFor, useAuth } from './app/AuthContext';
 import { Shell } from './app/Shell';
 import { ToastProvider } from './ui/Toast';
 import { LoginPage } from './pages/LoginPage';
+import { ResetPasswordPage } from './live/ResetPassword';
 import { DashboardPage, SubscriptionsPage, InvoicesPage, CatalogPage, RenewalsPage, PaymentsPage } from './live/Pages';
 import { DiscountsPage, UsersPage } from './live/AdminPages';
 import { PlanTemplatesPage } from './live/PlanTemplates';
@@ -21,6 +22,7 @@ function RootRedirect() { const { user, ready } = useAuth(); return !ready ? <di
 export default function App() {
   return <ToastProvider><AuthProvider><Routes>
     <Route path="/login" element={<LoginPage />} />
+    <Route path="/reset-password" element={<ResetPasswordPage />} />
     <Route element={<ShellRoute />}>
       <Route path="/dashboard" element={<Guard roles={['admin', 'staff']}><DashboardPage /></Guard>} />
       <Route path="/subscriptions" element={<Guard roles={['admin', 'staff']}><SubscriptionsPage /></Guard>} />

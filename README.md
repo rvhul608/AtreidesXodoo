@@ -22,6 +22,12 @@ Demo accounts created by the seed:
 - `staff@brightloop.local` / `DemoPass123!`
 - `customer1@brightloop.local` / `DemoPass123!`
 
+Support chat works immediately using published help articles and verified account lookups.
+To enable real transactional email, configure `RESEND_API_KEY` and a verified `MAIL_FROM` in `.env`,
+then recreate the API with `docker compose up -d --build`. See [email setup](docs/walkthroughs/email.md).
+Billing uses concurrent batches; run `npm run benchmark:billing` with local Node/Postgres to measure
+the 5,527-invoice workload in a dedicated benchmark database.
+
 ## Local development without Docker
 
 Requirements: Node 18+ and a local Postgres with a `brightloop` role (password `password`) that owns `brightloop_dev` and `brightloop_test`.

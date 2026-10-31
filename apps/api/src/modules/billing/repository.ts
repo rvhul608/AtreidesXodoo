@@ -86,6 +86,10 @@ export async function lockDiscountRules(
   client: PoolClient,
   shouldLock = true,
 ): Promise<DiscountRuleSnapshot[]> {
+  // Only finite usage budgets need an exclusive lock during calculation. Unlimited
+  // rules are read concurrently; their usage counters are incremented once per batch.
+  if (shouldLock) await client.query(`SELECT id FROM discount_rules
+    WHERE usage_limit IS NOT NULL AND times_used < usage_limit AND is_active ORDER BY id FOR UPDATE`);
   const result = await client.query<{
     id: string;
     kind: 'percentage' | 'fixed';
@@ -104,7 +108,7 @@ export async function lockDiscountRules(
        usage_limit, times_used, is_active
      FROM discount_rules
      WHERE applies_to IN ('subscription', 'products')
-     ORDER BY id ${shouldLock ? 'FOR UPDATE' : ''}`,
+     ORDER BY id`,
   );
   if (result.rows.length === 0) return [];
   const ids = result.rows.map((rule) => rule.id);

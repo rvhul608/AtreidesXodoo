@@ -9,13 +9,13 @@ import { Pool } from 'pg';
 import { config } from './common/config.js';
 import { db } from './common/db.js';
 import { errorHandler, notFoundHandler } from './common/error-middleware.js';
-import { startOutboxDispatcher, stopOutboxDispatcher } from './common/outbox.dispatcher.js';
 import authRoutes from './modules/auth/routes.js';
 import billingRoutes from './modules/billing/routes.js';
 import catalogRoutes from './modules/catalog/routes.js';
 import discountRoutes from './modules/discounts/routes.js';
 import invoiceRoutes from './modules/invoices/routes.js';
 import outboxRoutes from './modules/outbox/routes.js';
+import { startMailWorker } from './modules/outbox/delivery.js';
 import paymentRoutes from './modules/payments/routes.js';
 import planRoutes from './modules/plans/routes.js';
 import portalRoutes from './modules/portal/routes.js';
@@ -97,18 +97,9 @@ export async function startServer(): Promise<void> {
   await db.query('SELECT 1');
   const server = app.listen(config.API_PORT, () => {
     console.log(`Brightloop API listening on http://localhost:${config.API_PORT}`);
-    if (config.RESEND_API_KEY) {
-      console.log(`Outbox dispatcher running every ${config.OUTBOX_DISPATCH_INTERVAL_MS}ms (Resend API)`);
-    } else {
-      console.log('Outbox dispatcher disabled (RESEND_API_KEY not set; emails stay in the outbox table)');
-    }
   });
-  const dispatcherTimer = startOutboxDispatcher();
-  const shutdown = () => {
-    stopOutboxDispatcher(dispatcherTimer);
-    void db.end();
-    server.close();
-  };
+  const stopMail = startMailWorker();
+  const shutdown = () => server.close(() => { void stopMail().then(() => db.end()); });
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
 }

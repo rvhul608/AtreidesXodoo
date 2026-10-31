@@ -114,6 +114,7 @@ export async function createResetEmail(
       recipient: email,
       subject: 'Reset your Brightloop password',
       body: `Use this single-use link within 30 minutes: ${resetLink}`,
+      expiresAt,
     });
     await client.query('COMMIT');
     return true;

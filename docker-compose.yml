@@ -24,7 +24,11 @@ services:
       DATABASE_URL: postgresql://brightloop:password@postgres:5432/brightloop_dev
       NODE_ENV: production
       API_PORT: 3000
-      WEB_ORIGIN: http://localhost:5173
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      BILLING_CONCURRENCY: ${BILLING_CONCURRENCY:-4}
+      BILLING_BATCH_SIZE: ${BILLING_BATCH_SIZE:-100}
       JWT_SECRET: ${JWT_SECRET:-brightloop-local-development-secret-change-me}
       COOKIE_SECURE: "false"
       COOKIE_SAME_SITE: lax

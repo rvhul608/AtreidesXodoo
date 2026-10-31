@@ -160,6 +160,11 @@ export async function receivedPaymentExists(client: PoolClient, id: number) {
 }
 
 export async function releaseDiscountUsage(client: PoolClient, id: number) {
+  // Billing locks finite budgets before unlimited counters; cancellation follows
+  // the same order to avoid cycles when releasing several rules at once.
+  await client.query(`SELECT r.id FROM discount_rules r
+    WHERE r.id IN (SELECT discount_rule_id FROM discount_usage WHERE invoice_id = $1)
+    ORDER BY (r.usage_limit IS NULL), r.id FOR NO KEY UPDATE`, [id]);
   const removed = await client.query<{ discount_rule_id: string }>(
     'DELETE FROM discount_usage WHERE invoice_id = $1 RETURNING discount_rule_id',
     [id],

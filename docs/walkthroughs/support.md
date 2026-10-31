@@ -1,6 +1,6 @@
 # Customer support assistant
 
-The support assistant offers guided lookups and an experimental local-model chat. It never accepts arbitrary database queries. An authenticated customer can request their subscriptions, unpaid invoices, or an invoice breakdown.
+The support assistant searches published help articles and performs verified account lookups. It runs with the normal Docker stack and needs no model server, API key, or download. It never accepts arbitrary database queries. An authenticated customer can request their subscriptions, unpaid invoices, or an invoice breakdown. Staff and admins can use knowledge search, while account lookups require a customer session.
 
 The UI sends `POST /api/support/message` with one of these JSON bodies:
 
@@ -12,16 +12,12 @@ The response is `{ "data": { "message": "...", "items": [...] } }`. Lists return
 
 The route requires a customer session and derives the customer ID from `request.auth`, never the request body. The invoice breakdown reads stored totals; it does not yet call the billing engine's detailed explanation service.
 
-## Knowledge and local chat
+## Knowledge and chat
 
 After migrations, authenticated staff and admins can create and edit documents using `POST /api/support-knowledge` and `PUT /api/support-knowledge/:id`, with `{ "title": "...", "body": "...", "published": true }`. `GET /api/support-knowledge?page=1&pageSize=20` lists documents, including drafts. Set `published` to false to remove a document from customer retrieval. Do not put private account information in shared knowledge.
 
-Customers can send `POST /api/support/chat` with `{ "message": "What does the plan include?" }`. To include account information, the UI must explicitly specify `account`, for example `{ "message": "When is my next payment?", "account": { "topic": "unpaid_invoices" } }`. Topics match the guided API above. The backend searches published documents with PostgreSQL full-text search and returns `{ data: { answer, sources: [{ id, title }] } }`. It provides only matching document excerpts and explicitly requested customer-scoped account data to the model. Keyword search is not semantic vector search, and answers must be tested for accuracy.
+Send `POST /api/support/chat` with `{ "message": "How do I pause my subscription?" }`. Common account questions are recognized automatically: subscriptions, next billing, unpaid invoices, and `invoice 123`. Explicit `account` topics still work. Responses contain `{ data: { answer, sources: [{ id, title }], records: [...] } }`. Account records are always scoped to the session's customer ID, and draft invoices are hidden.
 
-The backend calls a llama.cpp OpenAI-compatible server at `http://127.0.0.1:8080` only. With a compatible `llama-server` binary installed, launch the downloaded model from the repository root:
+PostgreSQL full-text search drops common question words and searches remaining terms with OR, ranking matching articles. The response quotes up to two published excerpts and returns account records separately. This is keyword retrieval, not a general conversational model: it cannot infer arbitrary paraphrases or answer questions outside the knowledge base. Unknown questions return a contact-support message. React renders excerpts as plain text. Migration `0013` adds initial articles for pause/resume, renewal, invoices, and password resets.
 
-```sh
-models/llama-b11979/llama-server -m models/Qwen3-0.6B-Q8_0.gguf --host 127.0.0.1 --port 8080 -c 4096 --no-webui
-```
-
-The model and runtime files are ignored by Git and must be downloaded separately on another machine. The endpoint reports 503 when the server is unavailable; PostgreSQL and the model runtime must both be running. Model generation may exceed the project's two-second target, particularly on CPU. Generated text is untrusted; the UI must render it as text and never execute it. Do not expose the local model server to the network.
+Tests in `apps/api/test/support-chat.test.ts` cover authenticated access, staff knowledge search, natural-language account lookup, cross-customer isolation, draft visibility, and operation without any model connection.

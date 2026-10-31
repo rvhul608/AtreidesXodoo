@@ -4,15 +4,18 @@ The invoice engine is a pure function: it receives a subscription and tax snapsh
 and discount rule snapshots. It returns period dates, line calculations, totals, and a trace explaining
 each considered rule. It performs no database reads or writes.
 
-`POST /api/billing/run` works one subscription per transaction. PostgreSQL selects one due active
-subscription with `FOR UPDATE SKIP LOCKED`; the unique `(subscription_id, period_start)` constraint
-protects idempotency if another run reaches the same period. Each successful transaction stores the
-invoice, lines, history, discount usage and billing date together. Repeated calls catch up missed
-periods until no due subscription remains. If one subscription fails (for example a bad line), only its
-transaction rolls back: it gets no invoice, its billing date stays put, it is listed under `failed` in
-the response, and the run carries on with every other due subscription. The next run retries it.
+`POST /api/billing/run` uses four asynchronous workers by default. Each claims up to 100 due active
+subscriptions with `FOR UPDATE SKIP LOCKED`. The unique `(subscription_id, period_start)` constraint
+protects invoice uniqueness. Batch line reads replace per-subscription queries; one SQL statement
+stores invoices, lines, history, discount usage, counters, notifications, and advanced billing dates.
+The response counts only committed work. Workers catch up missed periods until their queue is empty.
+If a batch fails, it rolls back and that worker falls back to single-subscription transactions,
+isolating the bad subscription while other subscriptions continue. The next run retries failures.
 
-Eligible discount rules are locked before calculation. Rules run in id order, and each applies to the
+Only finite, unexhausted discount budgets require exclusive locks before calculation. Unlimited rules
+are read concurrently, with atomic usage counter increments once per batch. Finite counters also
+advance within the batch's calculation snapshot so a budget cannot be spent twice in one batch.
+Rules run in id order, and each applies to the
 remaining line values after earlier rules. Subscription rules select every line; product rules select
 only scoped products. The trace records date-window, usage-limit, minimum-purchase, minimum-quantity,
 and product-match decisions. Usage counts increase only with a created invoice; cancelling an invoice
@@ -47,8 +50,15 @@ was skipped (`expired`, `usage limit reached`, `below minimum purchase 5000.00`,
 
 ## Performance
 
-List and detail endpoints stay in the tens of milliseconds with 10,000 subscriptions and 5,500
-invoices. The billing run itself is a batch job: one transaction per subscription, about 12 ms each
-locally, so 500 due subscriptions take about 6 seconds and 5,500 take about 70. Running several
-workers in parallel (safe with `SKIP LOCKED`) would cut that further, but the discount-rule lock
-would first need narrowing to only the rules actually applied. That is not done yet.
+Configure `BILLING_CONCURRENCY` (1–8, default 4) and `BILLING_BATCH_SIZE` (1–500, default 100).
+Concurrency is asynchronous database work, not CPU threads. The pool has 10 connections by default;
+keep spare connections for interactive traffic. Finite discount budgets still serialize competing
+workers until exhausted; many active limited rules can reduce throughput.
+
+Run `npm run benchmark:billing` to generate a separate `brightloop_billing_benchmark` database and
+measure an authenticated HTTP billing request for 5,527 due subscriptions among 10,010 total rows,
+two invoice lines per due subscription, and the demo 100-use discount. It verifies all totals,
+discount usage, line count, and an empty rerun. It never resets the development database.
+`BENCHMARK_DATABASE_URL` must target that exact database; `BENCHMARK_ADMIN_URL` controls the server
+used to create it. `BENCHMARK_INVOICES` changes the due workload. Reported latency is a measured local
+result, not a guarantee across hardware, contention, networks, and arbitrary catch-up periods.
