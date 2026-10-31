@@ -1,0 +1,12 @@
+.live-admin-form { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.live-admin-form h2 { display:flex; align-items:center; gap:8px; }
+.live-admin-form label small { color:var(--ink-muted); font-size:10px; font-weight:400; line-height:1.4; }
+.live-admin-wide { grid-column:1/-1; }
+.live-admin-products { grid-column:1/-1; display:flex; flex-wrap:wrap; gap:9px 16px; padding:12px; border:1px solid var(--border); border-radius:12px; }
+.live-admin-products legend { padding:0 5px; color:var(--ink-muted); font-size:11px; }
+.live-admin-products label { display:flex; align-items:center; gap:6px; color:var(--ink); font-size:11px; }
+.live-admin-products label small { color:var(--ink-muted); }
+.live-admin-pager { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; color:var(--ink-muted); font-size:11px; }
+.live-admin-pager > div { display:flex; gap:7px; }
+@media(max-width:760px) { .live-admin-form { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:520px) { .live-admin-form { grid-template-columns:minmax(0,1fr); } .live-admin-wide,.live-admin-products { grid-column:1; } }

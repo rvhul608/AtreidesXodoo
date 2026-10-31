@@ -6,6 +6,7 @@ import { Button } from '../ui/Button';
 import { Input, PasswordChecklist, passwordRules } from '../ui/Field';
 import { LoopMark } from '../ui/Logo';
 import { useAuth } from '../app/AuthContext';
+import { apiErrorMessage, authApi } from '../live/api';
 
 type Mode = 'login' | 'signup';
 
@@ -20,7 +21,7 @@ const VIRTUES = [
   },
   {
     title: 'Answers come from your own articles.',
-    body: 'The support bot quotes the article it used and hands off to a person when needed.',
+    body: 'Invoices, plans and subscription records load from your connected account.',
   },
 ];
 
@@ -49,33 +50,15 @@ export function LoginPage() {
         if (signupBlocked) {
           throw new Error('Password needs an uppercase letter, a lowercase letter and a special character.');
         }
-        await signup(name, email);
+        await signup(name, email, password);
       }
-      navigate('/');
+        navigate('/');
     } catch (err) {
       setError(
         err instanceof Error && err.message === 'WRONG_CREDENTIALS'
-          ? 'Email or password is incorrect. Try a demo account below.'
-          : err instanceof Error
-            ? err.message
-            : 'Sign in failed. Try again.',
+          ? 'Email or password is incorrect.'
+          : apiErrorMessage(err),
       );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function demo(emailAddr: string) {
-    setMode('login');
-    setEmail(emailAddr);
-    setPassword('Brightloop1!');
-    setError(null);
-    setBusy(true);
-    try {
-      await login(emailAddr, 'Brightloop1!');
-      navigate('/');
-    } catch {
-      setError('Demo login failed.');
     } finally {
       setBusy(false);
     }
@@ -170,26 +153,15 @@ export function LoginPage() {
             </Button>
           </form>
 
-          <div className="demo-accounts">
-            <span className="caption">Demo accounts — one click, password Brightloop1!</span>
-            {[
-              { email: 'admin@brightloop.local', label: 'Admin / finance', detail: 'full system' },
-              { email: 'staff@brightloop.local', label: 'Staff', detail: 'day-to-day billing' },
-              { email: 'ana@acme.works', label: 'Customer', detail: 'portal + chatbot' },
-            ].map((d) => (
-              <button key={d.email} className="demo-accounts__row" onClick={() => demo(d.email)} disabled={busy}>
-                <span>
-                  <strong style={{ fontWeight: 600 }}>{d.label}</strong>
-                  <span className="caption" style={{ marginLeft: 8 }}>{d.detail}</span>
-                </span>
-                <span className="caption num">{d.email}</span>
-              </button>
-            ))}
-          </div>
-
           <button
             className="chat-footer-link"
-            onClick={() => setError('A reset link has been sent. Check your outbox in the admin view.')}
+            onClick={async () => {
+              if (!email.trim()) { setError('Enter your email address first.'); return; }
+              setBusy(true); setError(null);
+              try { const result = await authApi.requestReset(email); setError(result.message); }
+              catch (err) { setError(apiErrorMessage(err)); }
+              finally { setBusy(false); }
+            }}
           >
             Forgot password?
           </button>

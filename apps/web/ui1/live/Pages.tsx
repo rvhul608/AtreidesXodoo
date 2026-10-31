@@ -1,0 +1,129 @@
+import { useCallback, useEffect, useState } from 'react';
+import { AlertCircle, ArrowUpRight, CalendarDays, CircleCheck, FileText, Layers3, RefreshCw, WalletCards } from 'lucide-react';
+import { Button } from '../ui/Button';
+import { Pill } from '../ui/Pill';
+import { useAuth } from '../app/AuthContext';
+import { apiErrorMessage, http, loadInvoices, loadMyInvoices, loadMySubscriptions, loadPayments, loadPlans, loadProducts, loadRenewals, loadSubscriptions, type Subscription } from './api';
+import { BillingRunAction, RecordInvoicePayment } from './BillingActions';
+
+const money = (value: string | number) => {
+  const raw = String(value);
+  const negative = raw.startsWith('-');
+  const [wholeRaw, fractionRaw = ''] = raw.replace('-', '').split('.');
+  const whole = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Number(wholeRaw || '0'));
+  const fraction = fractionRaw.padEnd(2, '0').slice(0, 2);
+  return `${negative ? '−' : ''}₹${whole}.${fraction}`;
+};
+const toPaise = (value: string | number) => {
+  const raw = String(value);
+  const negative = raw.startsWith('-');
+  const [whole = '0', fraction = ''] = raw.replace('-', '').split('.');
+  const paise = BigInt(whole || '0') * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2) || '0');
+  return negative ? -paise : paise;
+};
+const moneyFromPaise = (value: bigint) => `${value < 0n ? '-' : ''}${value < 0n ? -value / 100n : value / 100n}.${String((value < 0n ? -value : value) % 100n).padStart(2, '0')}`;
+const date = (value: string | null) => value ? new Date(`${value.slice(0, 10)}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+
+function Header({ title: heading, subtitle, action }: { title: string; subtitle: string; action?: React.ReactNode }) {
+  return <div className="page__header live-header"><div><h1 className="page-title">{heading}</h1><span className="caption">{subtitle}</span></div>{action}</div>;
+}
+function Loading({ label = 'Loading workspace data…' }: { label?: string }) { return <div className="live-state"><span className="live-spinner" />{label}</div>; }
+function ErrorState({ message, retry }: { message: string; retry: () => void }) { return <div className="live-error"><AlertCircle size={18} /><span>{message}</span><button onClick={retry}>Try again</button></div>; }
+function useLoad<T>(load: () => Promise<T>, deps: unknown[]) {
+  const [value, setValue] = useState<T | null>(null); const [error, setError] = useState(''); const [loading, setLoading] = useState(true); const [tick, setTick] = useState(0);
+  const retry = useCallback(() => setTick((n) => n + 1), []);
+  useEffect(() => { let live = true; setLoading(true); setError(''); load().then((v) => { if (live) setValue(v); }).catch((e: unknown) => { if (live) setError(apiMessage(e)); }).finally(() => { if (live) setLoading(false); }); return () => { live = false; }; // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...deps, tick]);
+  return { value, error, loading, retry, setValue };
+}
+function apiMessage(error: unknown) { return apiErrorMessage(error); }
+function Metric({ label, value, detail, icon: Icon, tint }: { label: string; value: string; detail: string; icon: typeof Layers3; tint: string }) {
+  return <div className="live-metric"><span className={`live-metric-icon ${tint}`}><Icon size={17} /></span><div className="live-metric-label">{label}</div><strong>{value}</strong><small>{detail}</small></div>;
+}
+function Pager({ meta, page, setPage }: { meta?: { page: number; pageSize: number; total: number }; page: number; setPage: (n: number) => void }) {
+  if (!meta || meta.total <= meta.pageSize) return null;
+  const pages = Math.ceil(meta.total / meta.pageSize);
+  return <div className="live-pager"><span>Page {page} of {pages} · {meta.total} records</span><div><Button variant="secondary" size="sm" disabled={page === 1} onClick={() => setPage(page - 1)}>Previous</Button><Button variant="secondary" size="sm" disabled={page === pages} onClick={() => setPage(page + 1)}>Next</Button></div></div>;
+}
+
+export function DashboardPage() {
+  const { user } = useAuth(); const customer = user?.role === 'customer';
+  const subs = useLoad(() => customer ? loadMySubscriptions() : loadSubscriptions(), [customer]);
+  const bills = useLoad(() => customer ? loadMyInvoices() : loadInvoices(), [customer]);
+  const renew = useLoad(loadRenewals, [customer]);
+  const rows = subs.value?.data ?? []; const invoices = bills.value?.data ?? [];
+  const active = rows.filter((s) => s.status === 'Active');
+  const outstanding = invoices.filter((i) => ['Confirmed', 'Paid'].includes(i.status)).reduce((sum, i) => sum + toPaise(i.outstanding), 0n);
+  const overdue = invoices.filter((i) => i.status === 'Confirmed' && i.due_date < new Date().toISOString().slice(0, 10));
+  const statusCounts = ['Active', 'Paused', 'Confirmed', 'Quotation'].map((status) => ({ status, count: rows.filter((s) => s.status === status).length }));
+  const maxCount = Math.max(1, ...statusCounts.map((item) => item.count));
+  const failed = subs.error || bills.error;
+  return <div className="page live-page">
+    <Header title={customer ? `Welcome${user?.name ? `, ${user.name.split(' ')[0]}` : ''}` : 'Workspace overview'} subtitle="A live view from your Brightloop account." action={<div className="live-header-actions">{!customer && <BillingRunAction onReload={() => { subs.retry(); bills.retry(); renew.retry(); }} />}<Button onClick={() => { subs.retry(); bills.retry(); renew.retry(); }}><RefreshCw size={15} /> Refresh</Button></div>} />
+    {failed && <ErrorState message={subs.error || bills.error} retry={() => { subs.retry(); bills.retry(); renew.retry(); }} />}
+    {(subs.loading || bills.loading) ? <div className="live-metric-grid"><Loading /></div> : <div className="live-metric-grid">
+      <Metric label="Active subscriptions · loaded" value={subs.error ? '—' : String(active.length)} detail={subs.error ? 'Unavailable' : `among first ${rows.length} records`} icon={Layers3} tint="mint" />
+      <Metric label="Open balance · loaded" value={bills.error ? '—' : money(moneyFromPaise(outstanding))} detail={bills.error ? 'Unavailable' : `from first ${invoices.length} invoices`} icon={WalletCards} tint="lilac" />
+      <Metric label="Overdue · loaded" value={bills.error ? '—' : String(overdue.length)} detail={bills.error ? 'Unavailable' : `among first ${invoices.length} invoices`} icon={CalendarDays} tint="peach" />
+      <Metric label="Renewals soon" value={customer ? '—' : renew.value ? String(renew.value.data.length) : '—'} detail={customer ? 'Operations view only' : 'Next 30 days'} icon={CircleCheck} tint="blue" />
+    </div>}
+    <div className="live-grid-two">
+      <section className="card live-card"><div className="live-card-heading"><div><h2>Subscription mix</h2><p>Current status distribution from loaded subscriptions.</p></div><span className="live-illustration">◌</span></div>
+        {subs.loading ? <Loading /> : rows.length === 0 ? <div className="live-empty"><Layers3 /><strong>No subscriptions yet</strong><span>Subscriptions will appear here once they are created.</span></div> : <div className="live-bars">{statusCounts.map(({ status, count }, i) => <div className="live-bar-col" key={status}><div className={`live-bar bar-${i}`} style={{ height: `${Math.max(8, (count / maxCount) * 100)}%` }}><span>{count}</span></div><small>{status}</small></div>)}</div>}
+      </section>
+      <section className="card live-card"><div className="live-card-heading"><div><h2>{customer ? 'Your subscriptions' : 'Renewal queue'}</h2><p>{customer ? 'Your latest account activity.' : 'Active subscriptions expiring within 30 days.'}</p></div><span className="live-illustration lavender"><CalendarDays size={20} /></span></div>
+        {renew.loading && !customer ? <Loading /> : renew.error && !customer ? <div className="live-muted">Renewal queue unavailable: {renew.error}</div> : (renew.value?.data ?? []).length === 0 && !customer ? <div className="live-empty"><CircleCheck /><strong>All clear for now</strong><span>No upcoming renewals in this window.</span></div> : <div className="live-list">{(customer ? rows.slice(0, 5) : renew.value?.data.slice(0, 5) ?? []).map((item) => <div className="live-list-row" key={item.id}><span className="live-row-icon"><Layers3 size={16} /></span><span className="live-row-main"><strong>{'subscription_number' in item ? item.subscription_number : ''}</strong><small>{'customer_name' in item ? `${item.customer_name} · ` : ''}{'plan_name' in item ? item.plan_name : ''}</small></span><span className="live-row-date">{'expiry_date' in item ? date(item.expiry_date) : date((item as Subscription).next_billing_date)}</span></div>)}</div>}
+      </section>
+    </div>
+    <section className="card live-card"><div className="live-card-heading"><div><h2>Recent invoices</h2><p>Latest invoice records returned by the billing service.</p></div><a className="live-link" href={customer ? '/portal/invoices' : '/invoices'}>Open invoices <ArrowUpRight size={14} /></a></div>
+      {bills.loading ? <Loading /> : invoices.length ? <div className="live-invoices">{invoices.slice(0, 5).map((invoice) => <div className="live-invoice" key={invoice.id}><span className="live-row-icon"><FileText size={16} /></span><div className="live-row-main"><strong>{invoice.invoice_number}</strong><small>{customer ? date(invoice.issued_date) : invoice.customer_name} · due {date(invoice.due_date)}</small></div><span className="live-invoice-total">{money(invoice.total)}</span><Pill tone={invoice.status === 'Paid' ? 'good' : invoice.status === 'Confirmed' ? 'warn' : 'neutral'}>{invoice.status}</Pill></div>)}</div> : <div className="live-empty"><FileText /><strong>No invoices available</strong><span>Invoice records will appear here after billing.</span></div>}
+    </section>
+  </div>;
+}
+
+export function SubscriptionsPage() {
+  const { user } = useAuth(); const customer = user?.role === 'customer'; const [page, setPage] = useState(1); const [showCreate, setShowCreate] = useState(false); const [creating, setCreating] = useState(false); const [createError, setCreateError] = useState('');
+  const plans = useLoad(loadPlans, []); const products = useLoad(loadProducts, []);
+  const [customerId, setCustomerId] = useState(''); const [planId, setPlanId] = useState(''); const [productId, setProductId] = useState(''); const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10)); const [quantity, setQuantity] = useState('1');
+  const result = useLoad(() => customer ? loadMySubscriptions(page) : loadSubscriptions(page), [customer, page]); const [query, setQuery] = useState(''); const [busy, setBusy] = useState<number | null>(null);
+  const rows = result.value?.data.filter((s) => `${s.subscription_number} ${s.customer_name} ${s.plan_name} ${s.status}`.toLowerCase().includes(query.toLowerCase())) ?? [];
+  async function transition(id: number, to: Subscription['status']) { setBusy(id); try { await http.post(`/subscriptions/${id}/transition`, { to }); result.retry(); } catch (e) { alert(apiMessage(e)); } finally { setBusy(null); } }
+  async function createSubscription(event: React.FormEvent) { event.preventDefault(); setCreating(true); setCreateError(''); try { await http.post('/subscriptions', { customerId: Number(customerId), planId: Number(planId), startDate, lines: [{ productId: Number(productId), quantity }] }); setShowCreate(false); setCustomerId(''); setQuantity('1'); result.retry(); } catch (error) { setCreateError(apiMessage(error)); } finally { setCreating(false); } }
+  return <div className="page live-page"><Header title={customer ? 'My subscriptions' : 'Subscriptions'} subtitle="Manage your subscription records." action={!customer ? <Button onClick={() => setShowCreate((v) => !v)}>{showCreate ? 'Cancel' : '+ New subscription'}</Button> : undefined} />
+    {!customer && showCreate && <form className="card live-create-form" onSubmit={(e) => void createSubscription(e)}><div><h2>Create a draft subscription</h2><p>Pricing and tax are calculated by the API from the selected product and plan. Customer ID is required because no customer picker endpoint is available.</p></div><label>Customer ID<input className="field__input" type="number" min="1" required value={customerId} onChange={(e) => setCustomerId(e.target.value)} /></label><label>Plan<select className="field__select" required value={planId} onChange={(e) => setPlanId(e.target.value)}><option value="">Select a plan</option>{(plans.value?.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name} · {money(p.price)} / {p.period}</option>)}</select>{plans.error && <small className="support-error">Plans unavailable: {plans.error}</small>}</label><label>Product<select className="field__select" required value={productId} onChange={(e) => setProductId(e.target.value)}><option value="">Select a product</option>{(products.value?.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.name} · {money(p.sales_price)}</option>)}</select>{products.error && <small className="support-error">Products unavailable: {products.error}</small>}</label><label>Quantity<input className="field__input" type="number" step="0.01" min="0.01" required value={quantity} onChange={(e) => setQuantity(e.target.value)} /></label><label>Start date<input className="field__input" type="date" required value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>{createError && <div className="live-error">{createError}</div>}<Button type="submit" disabled={creating || plans.loading || products.loading || !plans.value?.data.length || !products.value?.data.length}>{creating ? 'Creating…' : 'Create draft'}</Button></form>}
+    <div className="live-toolbar"><input className="field__input" value={query} onChange={(e) => { setQuery(e.target.value); setPage(1); }} placeholder="Search this page" aria-label="Search subscriptions on this page" /><span className="caption">Showing {rows.length} of {result.value?.meta.total ?? '—'} records · search applies to loaded page</span><Button onClick={result.retry}><RefreshCw size={15} /> Refresh</Button></div>
+    {result.error && <ErrorState message={result.error} retry={result.retry} />}
+    <section className="card live-table-card">{result.loading ? <Loading /> : rows.length ? <div className="live-table-scroll"><table className="ds-table live-table"><thead><tr><th>Subscription</th>{!customer && <th>Customer</th>}<th>Plan</th><th>Status</th><th>Next renewal</th><th>Amount / period</th>{!customer && <th>Action</th>}</tr></thead><tbody>{rows.map((s) => <tr key={s.id}><td data-label="Subscription"><strong>{s.subscription_number}</strong></td>{!customer && <td data-label="Customer">{s.customer_name}</td>}<td data-label="Plan">{s.plan_name}<small className="live-subline">{s.period}</small></td><td data-label="Status"><Pill tone={s.status === 'Active' ? 'good' : s.status === 'Paused' ? 'warn' : 'neutral'}>{s.status}</Pill></td><td data-label="Next renewal">{date(s.next_billing_date ?? s.expiry_date)}</td><td data-label="Amount">{money(s.totals.total)}<small className="live-subline">{s.lines.length} line item{s.lines.length === 1 ? '' : 's'}</small></td>{!customer && <td data-label="Action">{s.status === 'Quotation' && <Button size="sm" disabled={busy === s.id} onClick={() => void transition(s.id, 'Confirmed')}>Confirm</Button>}{s.status === 'Confirmed' && <Button size="sm" disabled={busy === s.id} onClick={() => void transition(s.id, 'Active')}>Activate</Button>}{s.status === 'Active' && <Button size="sm" disabled={busy === s.id} onClick={() => void transition(s.id, 'Paused')}>Pause</Button>}{s.status === 'Paused' && <Button size="sm" disabled={busy === s.id} onClick={() => void transition(s.id, 'Active')}>Resume</Button>}</td>}</tr>)}</tbody></table></div> : <div className="live-empty"><Layers3 /><strong>No subscriptions found</strong><span>{query ? 'Try another search.' : 'There are no subscription records for this account yet.'}</span></div>}<Pager meta={result.value?.meta} page={page} setPage={setPage} /></section>
+  </div>;
+}
+
+export function InvoicesPage() {
+  const { user } = useAuth(); const customer = user?.role === 'customer'; const [page, setPage] = useState(1); const [paymentId, setPaymentId] = useState<number | null>(null);
+  const result = useLoad(() => customer ? loadMyInvoices(page) : loadInvoices(page), [customer, page]); const [busy, setBusy] = useState<number | null>(null);
+  async function action(id: number, name: 'confirm' | 'send' | 'cancel') { setBusy(id); try { await http.post(`/invoices/${id}/${name}`, {}); result.retry(); } catch (e) { alert(apiMessage(e)); } finally { setBusy(null); } }
+  return <div className="page live-page"><Header title={customer ? 'My invoices' : 'Invoices'} subtitle="Invoice information loaded from the billing service." action={<Button onClick={result.retry}><RefreshCw size={15} /> Refresh</Button>} />{result.error && <ErrorState message={result.error} retry={result.retry} />}
+    <section className="card live-table-card">{result.loading ? <Loading /> : result.value?.data.length ? <div className="live-table-scroll"><table className="ds-table live-table"><thead><tr><th>Invoice</th>{!customer && <th>Customer</th>}<th>Issued</th><th>Due</th><th>Status</th><th>Total</th><th>Outstanding</th>{!customer && <th>Actions</th>}</tr></thead><tbody>{result.value.data.map((i) => <tr key={i.id}><td data-label="Invoice"><strong>{i.invoice_number}</strong></td>{!customer && <td data-label="Customer">{i.customer_name}</td>}<td data-label="Issued">{date(i.issued_date)}</td><td data-label="Due">{date(i.due_date)}</td><td data-label="Status"><Pill tone={i.status === 'Paid' ? 'good' : i.status === 'Confirmed' ? 'warn' : 'neutral'}>{i.status}</Pill></td><td data-label="Total">{money(i.total)}</td><td data-label="Outstanding">{money(i.outstanding)}</td>{!customer && <td data-label="Actions"><div className="live-actions">{i.status === 'Draft' && <Button size="sm" disabled={busy === i.id} onClick={() => void action(i.id, 'confirm')}>Confirm</Button>}{i.status === 'Confirmed' && <><Button size="sm" disabled={busy === i.id} onClick={() => void action(i.id, 'send')}>Send</Button>{i.outstanding !== '0.00' && <Button size="sm" variant="secondary" onClick={() => setPaymentId(paymentId === i.id ? null : i.id)}>{paymentId === i.id ? 'Close payment' : 'Record payment'}</Button>}</>}</div></td>}</tr>)}</tbody></table></div> : <div className="live-empty"><FileText /><strong>No invoices found</strong><span>Invoices will appear here when they are created.</span></div>}<Pager meta={result.value?.meta} page={page} setPage={setPage} /></section>
+    {!customer && paymentId !== null && result.value?.data.find((i) => i.id === paymentId) && <RecordInvoicePayment invoiceId={paymentId} outstanding={result.value.data.find((i) => i.id === paymentId)!.outstanding} onReload={() => { result.retry(); setPaymentId(null); }} />}
+  </div>;
+}
+
+export function CatalogPage() {
+  const { user } = useAuth(); const canCreateProduct = user?.role === 'admin';
+  const [planPage, setPlanPage] = useState(1); const [productPage, setProductPage] = useState(1);
+  const plans = useLoad(() => loadPlans(planPage), [planPage]); const products = useLoad(() => loadProducts(productPage), [productPage]);
+  const [showCreate, setShowCreate] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  const [sku, setSku] = useState(''); const [name, setName] = useState(''); const [type, setType] = useState('service'); const [salesPrice, setSalesPrice] = useState(''); const [costPrice, setCostPrice] = useState(''); const [notes, setNotes] = useState('');
+  async function createProduct(event: React.FormEvent) { event.preventDefault(); setBusy(true); setError(''); try { await http.post('/products', { sku, name, type, salesPrice, costPrice, notes }); setShowCreate(false); setSku(''); setName(''); setSalesPrice(''); setCostPrice(''); setNotes(''); products.retry(); } catch (e) { setError(apiMessage(e)); } finally { setBusy(false); } }
+  return <div className="page live-page">
+    <Header title="Catalog" subtitle="Plans and products loaded from the live catalog API." action={<div className="live-header-actions"><Button variant="secondary" onClick={() => { plans.retry(); products.retry(); }}><RefreshCw size={15} /> Refresh</Button>{canCreateProduct && <Button onClick={() => setShowCreate((v) => !v)}>{showCreate ? 'Cancel' : '+ New product'}</Button>}</div>} />
+    {canCreateProduct && showCreate && <form className="card live-create-form" onSubmit={(e) => void createProduct(e)}><h2>Create product</h2><div className="live-form-fields"><label>SKU<input className="field__input" required value={sku} onChange={(e) => setSku(e.target.value)} /></label><label>Name<input className="field__input" required value={name} onChange={(e) => setName(e.target.value)} /></label><label>Type<input className="field__input" required value={type} onChange={(e) => setType(e.target.value)} /></label><label>Sales price<input className="field__input" inputMode="decimal" pattern="\d+(\.\d{1,2})?" required value={salesPrice} onChange={(e) => setSalesPrice(e.target.value)} /></label><label>Cost price<input className="field__input" inputMode="decimal" pattern="\d+(\.\d{1,2})?" required value={costPrice} onChange={(e) => setCostPrice(e.target.value)} /></label><label className="live-form-wide">Notes<input className="field__input" value={notes} onChange={(e) => setNotes(e.target.value)} /></label></div>{error && <div className="live-error">{error}</div>}<Button type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create product'}</Button></form>}
+    <section><div className="live-section-head"><div><h2>Products</h2><p>Page {productPage} · {products.value?.meta.total ?? '—'} total products.</p></div>{products.error && <ErrorState message={products.error} retry={products.retry} />}</div>{products.loading ? <Loading /> : products.value?.data.length ? <div className="card live-table-card"><div className="live-table-scroll"><table className="ds-table live-table"><thead><tr><th>Product</th><th>SKU</th><th>Type</th><th>Sales price</th><th>Cost price</th></tr></thead><tbody>{products.value.data.map((p) => <tr key={p.id}><td><strong>{p.name}</strong></td><td>{p.sku}</td><td>{p.type}</td><td>{money(p.sales_price)}</td><td>{money(p.cost_price)}</td></tr>)}</tbody></table></div><Pager meta={products.value.meta} page={productPage} setPage={setProductPage} /></div> : <div className="card live-empty"><Layers3 /><strong>No products found</strong><span>Create a product to use it on a subscription.</span></div>}</section>
+    <section><div className="live-section-head"><div><h2>Plans</h2><p>Page {planPage} · {plans.value?.meta.total ?? '—'} total plans.</p></div>{plans.error && <ErrorState message={plans.error} retry={plans.retry} />}</div>{plans.loading ? <Loading /> : <div className="live-plan-grid">{(plans.value?.data ?? []).map((p) => <div className="card live-plan" key={p.id}><span className="live-plan-icon"><Layers3 size={18} /></span><span className="caption">{p.plan_number}</span><h2>{p.name}</h2><p>{p.description || 'No description provided.'}</p><strong>{money(p.price)} <small>/ {p.period}</small></strong><div className="live-plan-tags"><span>Minimum {p.min_quantity}</span>{p.allow_renew && <span>Renewable</span>}{p.allow_pause && <span>Pause allowed</span>}</div></div>)}<Pager meta={plans.value?.meta} page={planPage} setPage={setPlanPage} /></div>}</section>
+  </div>;
+}
+
+export function RenewalsPage() {
+  const result = useLoad(loadRenewals, []); return <div className="page live-page"><Header title="Renewal queue" subtitle="Subscriptions due to expire in the next 30 days." action={<Button onClick={result.retry}><RefreshCw size={15} /> Refresh</Button>} />{result.error && <ErrorState message={result.error} retry={result.retry} />}{result.loading ? <Loading /> : <section className="card live-table-card">{result.value?.data.length ? <div className="live-table-scroll"><table className="ds-table live-table"><thead><tr><th>Subscription</th><th>Customer</th><th>Plan</th><th>Expiry</th><th>Days left</th><th>Renewal</th></tr></thead><tbody>{result.value.data.map((r) => <tr key={r.id}><td><strong>{r.subscription_number}</strong></td><td>{r.customer_name}</td><td>{r.plan_name}</td><td>{date(r.expiry_date)}</td><td>{r.days_left}</td><td><Pill tone={r.can_renew ? 'good' : 'neutral'}>{r.can_renew ? 'Allowed' : 'Unavailable'}</Pill></td></tr>)}</tbody></table></div> : <div className="live-empty"><CircleCheck /><strong>No upcoming renewals</strong><span>No active subscriptions expire in this period.</span></div>}</section>}</div>;
+}
+
+export function PaymentsPage() { const result = useLoad(loadPayments, []); return <div className="page live-page"><Header title="Payments" subtitle="Showing the most recent 50 payment records." action={<Button onClick={result.retry}><RefreshCw size={15} /> Refresh</Button>} />{result.error && <ErrorState message={result.error} retry={result.retry} />}{result.loading ? <Loading /> : <section className="card live-table-card">{result.value?.data.length ? <div className="live-table-scroll"><table className="ds-table live-table"><thead><tr><th>Payment</th><th>Invoice</th><th>Customer</th><th>Method</th><th>Paid on</th><th>Amount</th><th>Status</th></tr></thead><tbody>{result.value.data.map((p) => <tr key={p.id}><td>{p.id}</td><td>{p.invoice_number}</td><td>{p.customer_name}</td><td>{p.method.replace(/_/g, ' ')}</td><td>{date(p.paid_on)}</td><td>{money(p.amount)}</td><td>{p.status}</td></tr>)}</tbody></table></div> : <div className="live-empty"><WalletCards /><strong>No payment records</strong><span>Payment records appear after an invoice payment is received.</span></div>}</section>}</div>; }

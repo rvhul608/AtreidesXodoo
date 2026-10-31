@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Bell, BookOpen, CreditCard, FileText, Layers, LayoutDashboard,
-  LogOut, Moon, Package, Package2, Percent, Search, Sun, Users,
+  BadgePercent, BookOpen, CreditCard, FileText, Layers, LayoutDashboard,
+  LogOut, Moon, Package, Package2, RefreshCw, Sun, Users,
 } from 'lucide-react';
 import { Logo } from '../ui/Logo';
-import { Pill } from '../ui/Pill';
 import { useAuth } from './AuthContext';
-import type { Role } from '../mock/data';
+import type { Role } from './AuthContext';
+import { SupportChat } from '../live/Support';
 
 interface NavItem {
   to: string;
@@ -29,26 +29,21 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { to: '/subscriptions', label: 'Subscriptions', icon: Layers, roles: ['admin', 'staff'] },
       { to: '/invoices', label: 'Invoices', icon: FileText, roles: ['admin', 'staff'] },
       { to: '/payments', label: 'Payments', icon: CreditCard, roles: ['admin', 'staff'] },
+      { to: '/renewals', label: 'Renewals', icon: RefreshCw, roles: ['admin', 'staff'] },
     ],
   },
   {
     section: 'Catalog',
     items: [
       { to: '/catalog', label: 'Products & plans', icon: Package, roles: ['admin', 'staff'] },
-      { to: '/discounts', label: 'Discounts', icon: Percent, roles: ['admin'] },
+      { to: '/plans-templates', label: 'Plans & templates', icon: Layers, roles: ['admin', 'staff'] },
+      { to: '/discounts', label: 'Discounts', icon: BadgePercent, roles: ['admin'] },
+      { to: '/users', label: 'Users', icon: Users, roles: ['admin'] },
     ],
   },
   {
     section: 'Support',
-    items: [
-      { to: '/support-content', label: 'Support content', icon: BookOpen, roles: ['admin', 'staff'] },
-    ],
-  },
-  {
-    section: 'Admin',
-    items: [
-      { to: '/users', label: 'Staff', icon: Users, roles: ['admin'] },
-    ],
+    items: [{ to: '/support-content', label: 'Support knowledge', icon: BookOpen, roles: ['admin', 'staff'] }],
   },
   {
     section: 'Portal',
@@ -59,49 +54,16 @@ const NAV: { section: string; items: NavItem[] }[] = [
   },
 ];
 
-interface LiveEvent {
-  id: number;
-  text: string;
-  time: string;
-  tone: Parameters<typeof Pill>[0]['tone'];
-  label: string;
-}
-
-const START_EVENTS: LiveEvent[] = [
-  { id: 1, text: 'Invoice INV-1043 sent to Nimbus Retail.', time: '09:12', tone: 'info', label: 'Sent' },
-  { id: 2, text: 'Payment PAY-0845 recorded on INV-1041.', time: '09:31', tone: 'good', label: 'Paid' },
-];
-
-const LATER_EVENT: LiveEvent = {
-  id: 3,
-  text: 'Invoice INV-1040 went overdue — Kettle & Co.',
-  time: '10:02',
-  tone: 'bad',
-  label: 'Overdue',
-};
-
 export function Shell() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [events, setEvents] = useState<LiveEvent[]>(START_EVENTS);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [notifOpen, setNotifOpen] = useState(false);
-  const seenRef = useRef(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light',
   );
   const role = (user?.role ?? 'staff') as Role;
   const isCustomer = role === 'customer';
-
-  /* Simulated live event stream (SSE in production) so counters and
-     lists visibly update without a refresh. */
-  useEffect(() => {
-    if (seenRef.current) return;
-    seenRef.current = true;
-    const id = window.setTimeout(() => setEvents((prev) => [...prev, LATER_EVENT]), 9000);
-    return () => window.clearTimeout(id);
-  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -109,11 +71,9 @@ export function Shell() {
 
   useEffect(() => {
     setMenuOpen(false);
-    setNotifOpen(false);
   }, [location.pathname]);
 
   if (!user) return null;
-  const unread = events.length - 2;
 
   return (
     <div className="shell">
@@ -133,36 +93,24 @@ export function Shell() {
                     <NavLink
                       key={item.to}
                       to={item.to}
+                      aria-label={item.label}
+                      title={item.label}
                       className={({ isActive }) => `navitem${isActive ? ' is-active' : ''}`}
                     >
                       <span className="navitem__icon"><Icon size={18} strokeWidth={1.75} /></span>
-                      {item.label}
+                      <span className="sr-only">{item.label}</span>
                     </NavLink>
                   );
                 })}
             </div>
           ))}
         </nav>
-        <span className="caption">Brightloop · demo build</span>
+        <span className="sidebar-footnote">Live account</span>
       </aside>
 
       <div className="shell__main">
         <header className="topbar">
-          {!isCustomer && (
-            <div className="topbar__search">
-              <Search size={16} />
-              <input
-                className="field__input"
-                placeholder="Search customers, invoices…"
-                aria-label="Search"
-              />
-            </div>
-          )}
-          {isCustomer && (
-            <a href="/portal" onClick={(e) => e.preventDefault()} style={{ color: 'inherit' }}>
-              <Logo />
-            </a>
-          )}
+          <div className="topbar-context">{isCustomer ? 'Customer portal' : 'Subscription operations'}</div>
           <div className="topbar__right">
             <button
               className="iconbtn"
@@ -173,38 +121,16 @@ export function Shell() {
             </button>
 
             <div className="menu-activewrap">
-              <button
-                className="iconbtn notif-btn"
-                onClick={() => setNotifOpen((v) => !v)}
-                aria-label={`Notifications, ${events.length} events`}
-              >
-                <Bell size={18} />
-                {unread > 0 && <span className="dot" aria-hidden="true" />}
-              </button>
-              {notifOpen && (
-                <div className="menu" style={{ minWidth: 320 }}>
-                  <div className="caption" style={{ padding: '8px 10px' }}>Live updates</div>
-                  {events.slice(-4).reverse().map((ev) => (
-                    <div key={ev.id} className="menu__item" style={{ cursor: 'default' }}>
-                      <span style={{ minWidth: 0 }}>{ev.text}</span>
-                      <Pill tone={ev.tone}>{ev.label}</Pill>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="menu-activewrap">
               <button className="userchip" onClick={() => setMenuOpen((v) => !v)} aria-haspopup="menu">
-                <span className="avatar">{user.name.slice(0, 1)}</span>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>{user.name.split(' ')[0]}</span>
+                <span className="avatar">{(user.name ?? user.email).slice(0, 1).toUpperCase()}</span>
+                <span style={{ fontSize: 14, fontWeight: 600 }}>{(user.name ?? user.email).split(' ')[0]}</span>
                 <span className="caption" style={{ textTransform: 'capitalize' }}>{role}</span>
               </button>
               {menuOpen && (
                 <div className="menu" role="menu">
                   <div className="menu__item" style={{ cursor: 'default' }}>
                     <span style={{ minWidth: 0 }}>
-                      <strong style={{ fontWeight: 600 }}>{user.name}</strong>
+                      <strong style={{ fontWeight: 600 }}>{user.name ?? user.email}</strong>
                       <div className="caption">{user.email}</div>
                     </span>
                   </div>
@@ -227,6 +153,7 @@ export function Shell() {
         <main className="shell__content">
           <Outlet />
         </main>
+        <SupportChat />
       </div>
     </div>
   );
