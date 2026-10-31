@@ -4,6 +4,7 @@
  * WARNING: Destructive. Only use in dev environments.
  */
 
+import 'dotenv/config';
 import pg from 'pg';
 
 const client = new pg.Client({
@@ -36,6 +37,7 @@ async function reset() {
       'products',
       'email_outbox',
       'audit_log',
+      'outbox_emails',
       'reset_tokens',
       'users',
       'customers',

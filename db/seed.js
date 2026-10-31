@@ -4,8 +4,10 @@
  * Idempotent: uses ON CONFLICT DO NOTHING for re-entrancy.
  */
 
+import 'dotenv/config';
+import { createHash } from 'node:crypto';
 import pg from 'pg';
-import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 
 const client = new pg.Client({
   connectionString: process.env.DATABASE_URL || 'postgresql://brightloop:password@localhost:5432/brightloop_dev',
@@ -15,6 +17,33 @@ async function seed() {
   try {
     await client.connect();
     console.log('Connected to database');
+
+    const adminEmail = (process.env.SEED_ADMIN_EMAIL || 'admin@brightloop.local').trim().toLowerCase();
+    const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'ChangeMe123!';
+    const adminPasswordHash = await bcrypt.hash(
+      `brightloop-v1:${createHash('sha256').update(adminPassword, 'utf8').digest('base64')}`,
+      12
+    );
+    await client.query(
+      `INSERT INTO users (email, password_hash, role, name)
+       VALUES ($1, $2, 'admin', 'Brightloop Administrator')
+       ON CONFLICT (lower(email)) DO UPDATE
+       SET customer_id = NULL, password_hash = EXCLUDED.password_hash,
+           role = 'admin', name = EXCLUDED.name, is_active = true,
+           updated_at = CURRENT_TIMESTAMP`,
+      [adminEmail, adminPasswordHash]
+    );
+    console.log(`✓ Ensured seeded admin account ${adminEmail}`);
+
+    if (process.env.SEED_ADMIN_ONLY === 'true') {
+      console.log('✓ Admin-only seed complete');
+      return;
+    }
+
+    const demoPasswordHash = await bcrypt.hash(
+      `brightloop-v1:${createHash('sha256').update('DemoPass123!', 'utf8').digest('base64')}`,
+      12
+    );
 
     // Insert demo customers
     const customerIds = [];
@@ -38,12 +67,11 @@ async function seed() {
 
     // Insert demo users
     for (const customerId of customerIds.slice(0, 100)) {
-      const hashedPassword = crypto.createHash('sha256').update('password').digest('hex');
       await client.query(
         `INSERT INTO users (customer_id, email, password_hash, role)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (customer_id, email) DO NOTHING`,
-        [customerId, `admin@company${customerId}.local`, hashedPassword, 'admin']
+        [customerId, `user@company${customerId}.local`, demoPasswordHash, 'customer']
       );
     }
     console.log('✓ Created demo users');
